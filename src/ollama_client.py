@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from typing import Optional
 
 import httpx
@@ -44,10 +45,19 @@ def _extract_json_object(text: str) -> Optional[dict]:
 class OllamaClient:
     """Minimal async Ollama HTTP client."""
 
-    def __init__(self, base_url: str, model: str, timeout_seconds: int = 45):
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        timeout_seconds: int = 45,
+        max_tokens: int = 260,
+        temperature: float = 0.3,
+    ):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.max_tokens = max_tokens
+        self.temperature = temperature
 
     async def generate_giveaway_draft(
         self,
@@ -70,6 +80,10 @@ class OllamaClient:
             "prompt": prompt,
             "stream": False,
             "format": "json",
+            "options": {
+                "num_predict": self.max_tokens,
+                "temperature": self.temperature,
+            },
         }
 
         url = f"{self.base_url}/api/generate"
@@ -81,10 +95,35 @@ class OllamaClient:
                 response.raise_for_status()
                 data = response.json()
             except httpx.ReadTimeout as exc:
-                raise RuntimeError(
-                    f"Превышено время ожидания ответа Ollama ({self.timeout_seconds} сек). "
-                    "Увеличьте OLLAMA_TIMEOUT_SECONDS или используйте более быструю модель."
-                ) from exc
+                fast_model = await self._get_fastest_available_model(client)
+                if fast_model and fast_model != payload["model"]:
+                    logger.warning(
+                        "Timeout with model '%s'. Retrying once with faster model '%s'.",
+                        payload["model"],
+                        fast_model
+                    )
+                    retry_payload = dict(payload)
+                    retry_payload["model"] = fast_model
+                    retry_timeout = httpx.Timeout(self.timeout_seconds + 120)
+                    retry_client = httpx.AsyncClient(timeout=retry_timeout)
+                    try:
+                        try:
+                            retry_response = await retry_client.post(url, json=retry_payload)
+                            retry_response.raise_for_status()
+                            data = retry_response.json()
+                        finally:
+                            await retry_client.aclose()
+                    except Exception as retry_exc:
+                        raise RuntimeError(
+                            f"Превышено время ожидания ответа Ollama ({self.timeout_seconds} сек) "
+                            f"и повторная попытка с моделью '{fast_model}' тоже не удалась. "
+                            "Увеличьте OLLAMA_TIMEOUT_SECONDS или установите более быструю модель."
+                        ) from retry_exc
+                else:
+                    raise RuntimeError(
+                        f"Превышено время ожидания ответа Ollama ({self.timeout_seconds} сек). "
+                        "Увеличьте OLLAMA_TIMEOUT_SECONDS или используйте более быструю модель."
+                    ) from exc
             except httpx.HTTPStatusError as exc:
                 # Ollama returns 404 both for wrong path and for "model not found".
                 # Here we handle the common "model not found" case gracefully.
@@ -155,6 +194,38 @@ class OllamaClient:
             return first.get("name") or first.get("model")
         except Exception as exc:
             logger.error("Failed to fetch available models from Ollama: %s", exc)
+            return None
+
+    async def _get_fastest_available_model(self, client: httpx.AsyncClient) -> Optional[str]:
+        """
+        Returns the smallest available model by parameter size (e.g. 3B < 7B).
+        Falls back to first available model if size metadata is absent.
+        """
+        try:
+            response = await client.get(f"{self.base_url}/api/tags")
+            response.raise_for_status()
+            payload = response.json()
+            models = payload.get("models") or []
+            if not models:
+                return None
+
+            def model_size_score(model_item: dict) -> float:
+                details = model_item.get("details") or {}
+                raw_size = str(details.get("parameter_size", "")).strip().upper()
+                match = re.match(r"^([0-9]+(?:\.[0-9]+)?)\s*([BM])$", raw_size)
+                if not match:
+                    return float("inf")
+                value = float(match.group(1))
+                unit = match.group(2)
+                if unit == "M":
+                    return value / 1000.0
+                return value
+
+            sorted_models = sorted(models, key=model_size_score)
+            best = sorted_models[0]
+            return best.get("name") or best.get("model")
+        except Exception as exc:
+            logger.error("Failed to select fastest model from Ollama tags: %s", exc)
             return None
 
     def _build_prompt(

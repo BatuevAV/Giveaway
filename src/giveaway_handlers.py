@@ -110,7 +110,9 @@ async def _generate_ai_draft(context: ContextTypes.DEFAULT_TYPE, revision_reques
     client = OllamaClient(
         base_url=settings.OLLAMA_BASE_URL,
         model=settings.OLLAMA_MODEL,
-        timeout_seconds=settings.OLLAMA_TIMEOUT_SECONDS
+        timeout_seconds=settings.OLLAMA_TIMEOUT_SECONDS,
+        max_tokens=settings.OLLAMA_MAX_TOKENS,
+        temperature=settings.OLLAMA_TEMPERATURE,
     )
 
     current_draft = context.user_data.get('ai_draft')
