@@ -46,6 +46,15 @@ logger = logging.getLogger(__name__)
 ) = range(21)
 
 
+def _creation_mode_markup() -> InlineKeyboardMarkup:
+    """Клавиатура выбора режима создания."""
+    keyboard = [
+        [InlineKeyboardButton("🧩 Самостоятельно", callback_data="creation_manual")],
+        [InlineKeyboardButton("🤖 Автоматическое создание (AI)", callback_data="creation_ai")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
 @admin_only
 async def create_giveaway_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начало создания розыгрыша."""
@@ -53,15 +62,28 @@ async def create_giveaway_start(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data['giveaway'] = {}
     context.user_data.pop('ai_brief', None)
     context.user_data.pop('ai_draft', None)
-
-    keyboard = [
-        [InlineKeyboardButton("🧩 Самостоятельно", callback_data="creation_manual")],
-        [InlineKeyboardButton("🤖 Автоматическое создание (AI)", callback_data="creation_ai")]
-    ]
     await update.message.reply_text(
         "🎉 Создание нового розыгрыша\n\n"
         "Выберите режим создания:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        reply_markup=_creation_mode_markup()
+    )
+    return MODE_SELECT
+
+
+@admin_only
+async def start_create_from_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Старт создания розыгрыша по кнопке из /start-меню."""
+    query = update.callback_query
+    await query.answer()
+
+    context.user_data['giveaway'] = {}
+    context.user_data.pop('ai_brief', None)
+    context.user_data.pop('ai_draft', None)
+
+    await query.edit_message_text(
+        "🎉 Создание нового розыгрыша\n\n"
+        "Выберите режим создания:",
+        reply_markup=_creation_mode_markup()
     )
     return MODE_SELECT
 
@@ -1275,7 +1297,10 @@ async def navigation_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 def get_giveaway_conversation_handler() -> ConversationHandler:
     """Возвращает ConversationHandler для создания розыгрыша."""
     return ConversationHandler(
-        entry_points=[CommandHandler("create_giveaway", create_giveaway_start)],
+        entry_points=[
+            CommandHandler("create_giveaway", create_giveaway_start),
+            CallbackQueryHandler(start_create_from_menu, pattern="^start_create_launch$")
+        ],
         states={
             MODE_SELECT: [
                 CallbackQueryHandler(handle_creation_mode, pattern="^(creation_manual|creation_ai)$")

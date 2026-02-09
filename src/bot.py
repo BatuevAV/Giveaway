@@ -150,7 +150,7 @@ class GiveawayBot:
                 "после чего вы можете согласовать или отправить на доработку."
             )
             keyboard = [
-                [InlineKeyboardButton("🚀 Запустить создание", switch_inline_query_current_chat="/create_giveaway")],
+                [InlineKeyboardButton("🚀 Запустить создание", callback_data="start_create_launch")],
                 [InlineKeyboardButton("⬅️ Назад", callback_data="start_menu_back")]
             ]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
