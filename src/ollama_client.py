@@ -77,41 +77,64 @@ def _normalize_title(title: str, brief: str = "", raw_response: str = "") -> str
     return base.strip()
 
 
-def _format_prize_items(items: list[dict]) -> str:
+def _format_prize_items(items: list[dict], single_only: bool = True) -> str:
     """Convert structured prize list to readable text."""
     parts = []
     for item in items:
         if not isinstance(item, dict):
             continue
-        prize_type = str(item.get("type", "")).strip()
+        prize_type = str(
+            item.get("type")
+            or item.get("name")
+            or item.get("prize")
+            or item.get("title")
+            or ""
+        ).strip()
         qty = item.get("quantity")
         if not prize_type:
             continue
         if isinstance(qty, int) and qty > 0:
-            parts.append(f"{qty} x {prize_type}")
+            parts.append(f"{prize_type} ({qty} шт.)")
         else:
             parts.append(prize_type)
+        if single_only and parts:
+            break
     return ", ".join(parts).strip()
 
 
+def _extract_single_prize_text(text: str) -> str:
+    """Extract one prize from free-form text."""
+    value = (text or "").strip()
+    if not value:
+        return ""
+
+    # Prioritize first variant when alternatives are present.
+    for sep in [" или ", " / ", "\n", ";", ","]:
+        if sep in value:
+            value = value.split(sep)[0].strip()
+            break
+
+    # Cleanup wrappers.
+    value = value.strip(" -•")
+    return value
+
+
 def _normalize_prizes(prizes_value, brief: str = "", raw_response: str = "") -> str:
-    """Normalize prizes into plain readable string."""
+    """Normalize prizes into one plain readable string."""
     if isinstance(prizes_value, list):
-        text = _format_prize_items(prizes_value)
+        text = _format_prize_items(prizes_value, single_only=True)
         if text:
             return text
     elif isinstance(prizes_value, dict):
-        text = _format_prize_items([prizes_value])
+        text = _format_prize_items([prizes_value], single_only=True)
         if text:
             return text
 
     text = str(prizes_value or "").strip()
     if not text:
         combined = f"{brief}\n{raw_response}".lower()
-        if "сертификат" in combined and "сувенир" in combined:
-            return "3 x сертификат на 500 ₽, 10 x сувениры клуба"
         if "сертификат" in combined:
-            return "Сертификаты от клуба"
+            return "Сертификат на 500 ₽ в компьютерный клуб"
         if "сувенир" in combined:
             return "Фирменные сувениры клуба"
         return "Подарки от организатора"
@@ -128,11 +151,11 @@ def _normalize_prizes(prizes_value, brief: str = "", raw_response: str = "") -> 
             except Exception:
                 parsed = None
     if isinstance(parsed, list):
-        decoded = _format_prize_items(parsed)
+        decoded = _format_prize_items(parsed, single_only=True)
         if decoded:
             return decoded
 
-    return text
+    return _extract_single_prize_text(text)
 
 
 def _normalize_description(description: str, prizes: str) -> str:
@@ -141,9 +164,11 @@ def _normalize_description(description: str, prizes: str) -> str:
     if not text:
         text = "Участвуйте в розыгрыше и получайте призы от клуба."
 
-    # Replace awkward "или сувениры" style with neutral wording.
+    # Replace awkward wording and raw data dumps.
     text = re.sub(r"\s+", " ", text).strip()
     text = text.replace(" или сувениры", " и сувениры")
+    if any(token in text for token in ["[{", "{'", '["', '"]', "}]"]):
+        text = ""
 
     if prizes and "разыграем" not in text.lower():
         text = f"Среди участников разыграем: {prizes}."
@@ -154,6 +179,12 @@ def _normalize_rules(rules: str) -> str:
     """Ensure rules are readable and structured."""
     text = str(rules or "").strip()
     if not text:
+        return (
+            "1) Подпишитесь на канал клуба.\n"
+            "2) Нажмите кнопку участия под постом розыгрыша.\n"
+            "3) Дождитесь публикации результатов."
+        )
+    if "1)" not in text and "2)" not in text:
         return (
             "1) Подпишитесь на канал клуба.\n"
             "2) Нажмите кнопку участия под постом розыгрыша.\n"
@@ -267,18 +298,15 @@ def _build_heuristic_draft_from_brief(brief: str, raw_response: str = "") -> dic
 
     # Simple prizes detection.
     combined = f"{brief}\n{raw_response}".lower()
-    prizes_parts = []
     if "сертификат" in combined:
-        prizes_parts.append("Сертификат на 500 ₽ в компьютерный клуб")
-    if "сувенир" in combined:
-        prizes_parts.append("Фирменные сувениры клуба")
-    if not prizes_parts:
-        prizes_parts.append("Подарки от организатора")
-    prizes = ", ".join(prizes_parts)
+        prizes = "Сертификат на 500 ₽ в компьютерный клуб"
+    elif "сувенир" in combined:
+        prizes = "Фирменные сувениры клуба"
+    else:
+        prizes = "Подарок от организатора"
 
     description = (
-        "Мы подготовили розыгрыш для подписчиков нашего сообщества.\n"
-        "Подробности и условия участия — ниже."
+        f"Среди участников разыграем: {prizes}."
     )
 
     rules = (
@@ -502,6 +530,12 @@ class OllamaClient:
             "title, description, prizes, participation_rules",
             "Title must be 2-3 words in Russian and include emoji.",
             "Examples of title style: 'Осенняя лихорадка 🍁', 'Весенняя оттепель 🌸', 'Жаркий розыгрыш 🔥'.",
+            "Use the same structure as manual mode fields:",
+            "- title: short catchy name",
+            "- description: one concise sentence about the giveaway",
+            "- prizes: exactly ONE prize item, plain text string only",
+            "- participation_rules: 3 short numbered lines",
+            "Do not return arrays/objects in prizes. No [] {} in any field.",
             "Do not include markdown code fences.",
             "Keep the style clear, practical, and human.",
             "",
