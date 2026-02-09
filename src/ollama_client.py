@@ -76,9 +76,53 @@ class OllamaClient:
         timeout = httpx.Timeout(self.timeout_seconds)
 
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            data = response.json()
+            try:
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+                data = response.json()
+            except httpx.ReadTimeout as exc:
+                raise RuntimeError(
+                    f"Превышено время ожидания ответа Ollama ({self.timeout_seconds} сек). "
+                    "Увеличьте OLLAMA_TIMEOUT_SECONDS или используйте более быструю модель."
+                ) from exc
+            except httpx.HTTPStatusError as exc:
+                # Ollama returns 404 both for wrong path and for "model not found".
+                # Here we handle the common "model not found" case gracefully.
+                if exc.response is not None and exc.response.status_code == 404:
+                    try:
+                        error_payload = exc.response.json()
+                    except Exception:
+                        error_payload = {}
+                    error_text = str(error_payload.get("error", "")).strip()
+                    if "model" in error_text and "not found" in error_text:
+                        fallback_model = await self._get_first_available_model(client)
+                        if fallback_model:
+                            logger.warning(
+                                "Configured model '%s' not found. Falling back to '%s'.",
+                                self.model,
+                                fallback_model
+                            )
+                            payload["model"] = fallback_model
+                            try:
+                                response = await client.post(url, json=payload)
+                                response.raise_for_status()
+                                data = response.json()
+                            except httpx.ReadTimeout as timeout_exc:
+                                raise RuntimeError(
+                                    f"Модель '{fallback_model}' отвечает слишком долго "
+                                    f"(таймаут {self.timeout_seconds} сек). "
+                                    "Увеличьте OLLAMA_TIMEOUT_SECONDS."
+                                ) from timeout_exc
+                        else:
+                            raise RuntimeError(
+                                f"Модель '{self.model}' не найдена в Ollama и не удалось определить доступные модели."
+                            ) from exc
+                    else:
+                        raise RuntimeError(
+                            f"Ollama вернул 404 по URL {url}. Проверьте OLLAMA_BASE_URL."
+                        ) from exc
+                else:
+                    raise RuntimeError(f"Ollama request failed: {exc}") from exc
 
         raw = data.get("response", "")
         parsed = _extract_json_object(raw)
@@ -97,6 +141,21 @@ class OllamaClient:
             raise RuntimeError(f"AI response missing required fields: {', '.join(missing)}")
 
         return cleaned
+
+    async def _get_first_available_model(self, client: httpx.AsyncClient) -> Optional[str]:
+        """Returns first installed model from Ollama /api/tags."""
+        try:
+            response = await client.get(f"{self.base_url}/api/tags")
+            response.raise_for_status()
+            payload = response.json()
+            models = payload.get("models") or []
+            if not models:
+                return None
+            first = models[0]
+            return first.get("name") or first.get("model")
+        except Exception as exc:
+            logger.error("Failed to fetch available models from Ollama: %s", exc)
+            return None
 
     def _build_prompt(
         self,
