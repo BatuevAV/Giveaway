@@ -1,11 +1,12 @@
 """Основной модуль бота для розыгрышей."""
 
 import logging
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 from config import settings
 from src.admin_handlers import add_admin, remove_admin, list_admins
+from src.database import Database
 from src.giveaway_handlers import get_giveaway_conversation_handler
 from src.list_handlers import (
     list_giveaways, view_giveaway, view_giveaway_callback, publish_giveaway,
@@ -38,6 +39,48 @@ class GiveawayBot:
         """
         self.token = token
         self.application = None
+
+    async def _build_help_text(self, user_id: int) -> str:
+        """Формирует help-текст с учетом роли пользователя."""
+        from src.permissions import is_admin, is_owner
+
+        is_user_admin = await is_admin(user_id)
+        is_user_owner = await is_owner(user_id)
+
+        help_text = "📋 Доступные команды:\n\n"
+        help_text += "👤 Для всех:\n"
+        help_text += "/start - Начать работу с ботом\n"
+        help_text += "/help - Показать это сообщение\n"
+
+        if is_user_admin:
+            help_text += "\n👨‍💼 Для администраторов:\n"
+            help_text += "/create_giveaway - Создать новый розыгрыш\n"
+            help_text += "/list_giveaways - Список всех розыгрышей\n"
+            help_text += "/view_giveaway <id> - Подробная информация о розыгрыше\n"
+            help_text += "/draw_winners <id> - Провести розыгрыш и выбрать победителей\n"
+            help_text += "/force_draw <id> - Принудительный розыгрыш (если участников мало)\n"
+            help_text += "/redraw_winners <id> - Провести повторный розыгрыш\n"
+            help_text += "/edit_giveaway <id> - Изменить параметры розыгрыша\n"
+            help_text += "/delete_giveaway <id> - Удалить розыгрыш\n"
+            help_text += "/delete_giveaways <id1,id2,...> - Удалить несколько розыгрышей\n"
+            help_text += "/cancel - Отменить текущее действие\n"
+
+        if is_user_owner:
+            help_text += "\n👑 Для владельца:\n"
+            help_text += "/add_admin <id> - Добавить администратора\n"
+            help_text += "/remove_admin <id> - Удалить администратора\n"
+            help_text += "/list_admins - Список администраторов\n"
+
+        return help_text
+
+    def _start_menu_markup(self) -> InlineKeyboardMarkup:
+        """Клавиатура стартового меню."""
+        keyboard = [
+            [InlineKeyboardButton("❓ Помощь", callback_data="start_menu_help")],
+            [InlineKeyboardButton("🎉 Создать розыгрыш", callback_data="start_menu_create")],
+            [InlineKeyboardButton("📋 Список розыгрышей", callback_data="start_menu_list")]
+        ]
+        return InlineKeyboardMarkup(keyboard)
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
@@ -51,7 +94,8 @@ class GiveawayBot:
         await update.message.reply_text(
             f"Привет, {user.first_name}! 👋\n\n"
             "Я бот для проведения розыгрышей.\n"
-            "Функционал в разработке."
+            "Выберите действие:",
+            reply_markup=self._start_menu_markup()
         )
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -62,37 +106,80 @@ class GiveawayBot:
             update: Объект обновления Telegram
             context: Контекст выполнения
         """
-        from src.permissions import is_admin, is_owner
-        
-        user_id = update.effective_user.id
-        is_user_admin = await is_admin(user_id)
-        is_user_owner = await is_owner(user_id)
-        
-        help_text = "📋 Доступные команды:\n\n"
-        help_text += "👤 Для всех:\n"
-        help_text += "/start - Начать работу с ботом\n"
-        help_text += "/help - Показать это сообщение\n"
-        
-        if is_user_admin:
-            help_text += "\n👨‍💼 Для администраторов:\n"
-            help_text += "/create_giveaway - Создать новый розыгрыш\n"
-            help_text += "/list_giveaways - Список всех розыгрышей\n"
-            help_text += "/view_giveaway <id> - Подробная информация о розыгрыше\n"
-            help_text += "/draw_winners <id> - Провести розыгрыш и выбрать победителей\n"
-            help_text += "/force_draw <id> - Принудительный розыгрыш (если участников мало)\n"
-            help_text += "/redraw_winners <id> - Провести повторный розыгрыш\n"
-            help_text += "/edit_giveaway <id> - Изменить параметры розыгрыша\n"
-            help_text += "/delete_giveaway <id> - Удалить розыгрыш\n"
-            help_text += "/delete_giveaways <id1,id2,...> - Удалить несколько розыгрышей\n"
-            help_text += "/cancel - Отменить текущее действие\n"
-        
-        if is_user_owner:
-            help_text += "\n👑 Для владельца:\n"
-            help_text += "/add_admin <id> - Добавить администратора\n"
-            help_text += "/remove_admin <id> - Удалить администратора\n"
-            help_text += "/list_admins - Список администраторов\n"
-        
+        help_text = await self._build_help_text(update.effective_user.id)
         await update.message.reply_text(help_text)
+
+    async def start_menu_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Обработка кнопок стартового меню."""
+        from src.permissions import is_admin
+
+        query = update.callback_query
+        await query.answer()
+        action = query.data
+        user_id = update.effective_user.id
+
+        if action == "start_menu_help":
+            help_text = await self._build_help_text(user_id)
+            keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="start_menu_back")]]
+            await query.edit_message_text(help_text, reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+
+        if action == "start_menu_create":
+            text = (
+                "🎉 Создание розыгрыша\n\n"
+                "Для запуска используйте команду: /create_giveaway\n\n"
+                "Внутри мастера будут 2 варианта:\n"
+                "1. 🧩 Самостоятельно — ручной ввод всех полей.\n"
+                "2. 🤖 Автоматическое создание (AI) — Ollama генерирует название, описание, призы и условия, "
+                "после чего вы можете согласовать или отправить на доработку."
+            )
+            keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="start_menu_back")]]
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+
+        if action == "start_menu_list":
+            if not await is_admin(user_id):
+                await query.edit_message_text(
+                    "⛔️ Список розыгрышей доступен только администраторам.\n\n"
+                    "Если у вас есть права администратора, используйте /list_giveaways.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="start_menu_back")]])
+                )
+                return
+
+            db = Database(settings.DATABASE_URL)
+            try:
+                giveaways = await db.get_all_giveaways()
+                if not giveaways:
+                    await query.edit_message_text(
+                        "📋 Розыгрышей пока нет.\n\nСоздайте первый: /create_giveaway",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="start_menu_back")]])
+                    )
+                    return
+
+                text = f"📋 Всего розыгрышей: {len(giveaways)}\n\n"
+                for giveaway in giveaways[:10]:
+                    status = "✅" if giveaway.is_active else "🔴"
+                    published = "📢" if giveaway.is_published else "📝"
+                    text += f"{status}{published} #{giveaway.id} — {giveaway.title}\n"
+
+                keyboard = [
+                    [InlineKeyboardButton(f"🔎 Открыть #{g.id}", callback_data=f"view_giveaway_{g.id}")]
+                    for g in giveaways[:10]
+                ]
+                keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="start_menu_back")])
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+            finally:
+                await db.close()
+            return
+
+        if action == "start_menu_back":
+            user = update.effective_user
+            await query.edit_message_text(
+                f"Привет, {user.first_name}! 👋\n\n"
+                "Я бот для проведения розыгрышей.\n"
+                "Выберите действие:",
+                reply_markup=self._start_menu_markup()
+            )
     
     def setup_handlers(self) -> None:
         """Настройка обработчиков команд."""
@@ -116,6 +203,7 @@ class GiveawayBot:
         self.application.add_handler(CommandHandler("delete_giveaways", delete_giveaways))
         
         # Callback кнопки для управления розыгрышами
+        self.application.add_handler(CallbackQueryHandler(self.start_menu_callback, pattern=r"^start_menu_"))
         self.application.add_handler(CallbackQueryHandler(view_giveaway_callback, pattern=r"^view_giveaway_\d+$"))
         self.application.add_handler(CallbackQueryHandler(edit_giveaway_callback, pattern=r"^edit_\d+$"))
         self.application.add_handler(CallbackQueryHandler(back_to_list_callback, pattern=r"^back_to_list$"))
