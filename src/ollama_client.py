@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+import ast
 from typing import Optional
 
 import httpx
@@ -22,6 +23,14 @@ def _extract_json_object(text: str) -> Optional[dict]:
         parsed = json.loads(text)
         if isinstance(parsed, dict):
             return parsed
+        # Some models return JSON as string literal; parse one more time.
+        if isinstance(parsed, str):
+            try:
+                parsed2 = json.loads(parsed)
+                if isinstance(parsed2, dict):
+                    return parsed2
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -37,8 +46,59 @@ def _extract_json_object(text: str) -> Optional[dict]:
         if isinstance(parsed, dict):
             return parsed
     except Exception:
+        # Relaxed fallback for python-like dicts with single quotes.
+        try:
+            parsed = ast.literal_eval(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return None
+
+    return None
+
+
+def _extract_sections_fallback(text: str) -> Optional[dict]:
+    """
+    Fallback parser for human-formatted responses:
+    "Название: ...", "Описание: ...", "Призы: ...", "Условия участия: ..."
+    """
+    if not text:
         return None
 
+    labels = {
+        "title": [r"название", r"title"],
+        "description": [r"описание", r"description"],
+        "prizes": [r"призы", r"приз", r"prizes", r"prize"],
+        "participation_rules": [r"условия участия", r"условия", r"rules", r"participation rules"],
+    }
+
+    # Find marker positions.
+    markers = []
+    for field, variants in labels.items():
+        pattern = r"(?im)^\s*(?:[-*]\s*)?(?:\*{0,2})(" + "|".join(variants) + r")(?:\*{0,2})\s*[:\-]\s*"
+        for match in re.finditer(pattern, text):
+            markers.append((match.start(), match.end(), field))
+
+    if not markers:
+        return None
+
+    markers.sort(key=lambda x: x[0])
+    values = {}
+    for i, (_, content_start, field) in enumerate(markers):
+        next_start = markers[i + 1][0] if i + 1 < len(markers) else len(text)
+        chunk = text[content_start:next_start].strip()
+        if chunk:
+            values[field] = chunk
+
+    # Ensure all required fields exist.
+    cleaned = {
+        "title": str(values.get("title", "")).strip(),
+        "description": str(values.get("description", "")).strip(),
+        "prizes": str(values.get("prizes", "")).strip(),
+        "participation_rules": str(values.get("participation_rules", "")).strip(),
+    }
+    if all(cleaned.values()):
+        return cleaned
     return None
 
 
@@ -165,6 +225,8 @@ class OllamaClient:
 
         raw = data.get("response", "")
         parsed = _extract_json_object(raw)
+        if not parsed:
+            parsed = _extract_sections_fallback(raw)
         if not parsed:
             raise RuntimeError("AI returned non-JSON response")
 
