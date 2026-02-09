@@ -58,8 +58,10 @@ def _normalize_title(title: str, brief: str = "", raw_response: str = "") -> str
 
     # If model already returned short title, keep its words (max 3 words).
     if 2 <= len(words) <= 3 and len(" ".join(words)) <= 36:
-        base = " ".join(words)
-        base = base[0].upper() + base[1:] if base else base
+        base_words = [w.lower() for w in words]
+        if base_words:
+            base_words[0] = base_words[0].capitalize()
+        base = " ".join(base_words)
     else:
         base = f"{adjective} {noun}"
 
@@ -73,6 +75,91 @@ def _normalize_title(title: str, brief: str = "", raw_response: str = "") -> str
     if not _contains_emoji(base):
         base = f"{base} {emoji}"
     return base.strip()
+
+
+def _format_prize_items(items: list[dict]) -> str:
+    """Convert structured prize list to readable text."""
+    parts = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        prize_type = str(item.get("type", "")).strip()
+        qty = item.get("quantity")
+        if not prize_type:
+            continue
+        if isinstance(qty, int) and qty > 0:
+            parts.append(f"{qty} x {prize_type}")
+        else:
+            parts.append(prize_type)
+    return ", ".join(parts).strip()
+
+
+def _normalize_prizes(prizes_value, brief: str = "", raw_response: str = "") -> str:
+    """Normalize prizes into plain readable string."""
+    if isinstance(prizes_value, list):
+        text = _format_prize_items(prizes_value)
+        if text:
+            return text
+    elif isinstance(prizes_value, dict):
+        text = _format_prize_items([prizes_value])
+        if text:
+            return text
+
+    text = str(prizes_value or "").strip()
+    if not text:
+        combined = f"{brief}\n{raw_response}".lower()
+        if "сертификат" in combined and "сувенир" in combined:
+            return "3 x сертификат на 500 ₽, 10 x сувениры клуба"
+        if "сертификат" in combined:
+            return "Сертификаты от клуба"
+        if "сувенир" in combined:
+            return "Фирменные сувениры клуба"
+        return "Подарки от организатора"
+
+    # Try decode JSON/Python list string like:
+    # [{'type': 'сертификат', 'quantity': 3}, ...]
+    parsed = None
+    if text.startswith("[") and text.endswith("]"):
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            try:
+                parsed = ast.literal_eval(text)
+            except Exception:
+                parsed = None
+    if isinstance(parsed, list):
+        decoded = _format_prize_items(parsed)
+        if decoded:
+            return decoded
+
+    return text
+
+
+def _normalize_description(description: str, prizes: str) -> str:
+    """Fix awkward wording and keep text concise."""
+    text = str(description or "").strip()
+    if not text:
+        text = "Участвуйте в розыгрыше и получайте призы от клуба."
+
+    # Replace awkward "или сувениры" style with neutral wording.
+    text = re.sub(r"\s+", " ", text).strip()
+    text = text.replace(" или сувениры", " и сувениры")
+
+    if prizes and "разыграем" not in text.lower():
+        text = f"Среди участников разыграем: {prizes}."
+    return text
+
+
+def _normalize_rules(rules: str) -> str:
+    """Ensure rules are readable and structured."""
+    text = str(rules or "").strip()
+    if not text:
+        return (
+            "1) Подпишитесь на канал клуба.\n"
+            "2) Нажмите кнопку участия под постом розыгрыша.\n"
+            "3) Дождитесь публикации результатов."
+        )
+    return text
 
 
 def _extract_json_object(text: str) -> Optional[dict]:
@@ -343,10 +430,11 @@ class OllamaClient:
         cleaned = {
             "title": str(parsed.get("title", "")).strip(),
             "description": str(parsed.get("description", "")).strip(),
-            "prizes": str(parsed.get("prizes", "")).strip(),
-            "participation_rules": str(parsed.get("participation_rules", "")).strip(),
+            "prizes": _normalize_prizes(parsed.get("prizes", ""), brief=brief, raw_response=raw),
+            "participation_rules": _normalize_rules(str(parsed.get("participation_rules", "")).strip()),
         }
         cleaned["title"] = _normalize_title(cleaned["title"], brief=brief, raw_response=raw)
+        cleaned["description"] = _normalize_description(cleaned["description"], cleaned["prizes"])
 
         missing = [key for key, value in cleaned.items() if not value]
         if missing:
