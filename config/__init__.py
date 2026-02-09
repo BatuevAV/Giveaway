@@ -25,6 +25,12 @@ class Settings:
         for admin_id in os.getenv('ADMIN_IDS', '').split(',') 
         if admin_id.strip()
     ]
+
+    # Ollama (AI assistant for automatic content generation)
+    OLLAMA_ENABLED: bool = os.getenv('OLLAMA_ENABLED', 'false').lower() in ('1', 'true', 'yes', 'on')
+    OLLAMA_BASE_URL: str = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
+    OLLAMA_MODEL: str = os.getenv('OLLAMA_MODEL', 'llama3.1:8b')
+    OLLAMA_TIMEOUT_SECONDS: int = int(os.getenv('OLLAMA_TIMEOUT_SECONDS', '45'))
     
     def validate(self) -> bool:
         """

@@ -14,6 +14,7 @@ from telegram.ext import (
 from telegram_bot_calendar import DetailedTelegramCalendar, LSTEP
 
 from src.database import Database
+from src.ollama_client import OllamaClient
 from src.permissions import admin_only
 from config import settings
 
@@ -21,6 +22,10 @@ logger = logging.getLogger(__name__)
 
 # Состояния для ConversationHandler
 (
+    MODE_SELECT,
+    AI_BRIEF,
+    AI_REVIEW,
+    AI_FEEDBACK,
     TITLE,
     DESCRIPTION,
     PRIZES,
@@ -38,22 +43,219 @@ logger = logging.getLogger(__name__)
     ANNOUNCEMENT_TEXT,
     PREVIEW,
     CONFIRM
-) = range(17)
+) = range(21)
 
 
 @admin_only
 async def create_giveaway_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начало создания розыгрыша."""
-    await update.message.reply_text(
-        "🎉 Создание нового розыгрыша\n\n"
-        "Давайте настроим все параметры вашего розыгрыша.\n\n"
-        "Шаг 1/11: Введите название розыгрыша:"
-    )
-    
     # Инициализируем данные розыгрыша в контексте
     context.user_data['giveaway'] = {}
-    
-    return TITLE
+    context.user_data.pop('ai_brief', None)
+    context.user_data.pop('ai_draft', None)
+
+    keyboard = [
+        [InlineKeyboardButton("🧩 Самостоятельно", callback_data="creation_manual")],
+        [InlineKeyboardButton("🤖 Автоматическое создание (AI)", callback_data="creation_ai")]
+    ]
+    await update.message.reply_text(
+        "🎉 Создание нового розыгрыша\n\n"
+        "Выберите режим создания:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return MODE_SELECT
+
+
+def _format_ai_draft(draft: dict) -> str:
+    """Форматирование AI-черновика для согласования."""
+    text = "🤖 AI подготовил черновик:\n\n"
+    text += f"📝 Название:\n{draft.get('title', '')}\n\n"
+    text += f"📄 Описание:\n{draft.get('description', '')}\n\n"
+    text += f"🏆 Призы:\n{draft.get('prizes', '')}\n\n"
+    text += f"📋 Условия участия:\n{draft.get('participation_rules', '')}\n"
+    return text
+
+
+async def _generate_ai_draft(context: ContextTypes.DEFAULT_TYPE, revision_request: str = None) -> dict:
+    """Генерация/перегенерация черновика через Ollama."""
+    if not settings.OLLAMA_ENABLED:
+        raise RuntimeError("AI-режим отключен. Включите OLLAMA_ENABLED=true в .env")
+
+    brief = context.user_data.get('ai_brief')
+    if not brief:
+        raise RuntimeError("Не найден brief для генерации")
+
+    client = OllamaClient(
+        base_url=settings.OLLAMA_BASE_URL,
+        model=settings.OLLAMA_MODEL,
+        timeout_seconds=settings.OLLAMA_TIMEOUT_SECONDS
+    )
+
+    current_draft = context.user_data.get('ai_draft')
+    draft = await client.generate_giveaway_draft(
+        brief=brief,
+        revision_request=revision_request,
+        current_draft=current_draft if revision_request else None
+    )
+    context.user_data['ai_draft'] = draft
+    return draft
+
+
+async def handle_creation_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Выбор режима создания розыгрыша."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "creation_manual":
+        await query.edit_message_text(
+            "🧩 Самостоятельное создание выбрано.\n\n"
+            "Шаг 1/11: Введите название розыгрыша:"
+        )
+        return TITLE
+
+    if not settings.OLLAMA_ENABLED:
+        await query.edit_message_text(
+            "❌ AI-режим сейчас отключен (OLLAMA_ENABLED=false).\n\n"
+            "Переключаемся на самостоятельное создание.\n"
+            "Шаг 1/11: Введите название розыгрыша:"
+        )
+        return TITLE
+
+    await query.edit_message_text(
+        "🤖 Автоматическое создание выбрано.\n\n"
+        "Опишите коротко задачу для AI:\n"
+        "- тема/идея розыгрыша\n"
+        "- что разыгрываем\n"
+        "- целевая аудитория/тон\n\n"
+        "Пример: \"Розыгрыш для подписчиков канала о маркетинге, приз: консультация и гайд, стиль дружелюбный\""
+    )
+    return AI_BRIEF
+
+
+async def receive_ai_brief(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получение brief и первая генерация черновика."""
+    brief = update.message.text.strip()
+    if len(brief) < 12:
+        await update.message.reply_text("❌ Слишком короткое описание. Добавьте больше деталей.")
+        return AI_BRIEF
+
+    context.user_data['ai_brief'] = brief
+
+    try:
+        draft = await _generate_ai_draft(context)
+    except Exception as e:
+        logger.error(f"AI draft generation failed: {e}")
+        await update.message.reply_text(
+            "❌ Не удалось сгенерировать черновик через AI.\n"
+            f"Причина: {str(e)}\n\n"
+            "Можно продолжить вручную: введите название розыгрыша."
+        )
+        return TITLE
+
+    keyboard = [
+        [InlineKeyboardButton("✅ Принять черновик", callback_data="accept_ai_draft")],
+        [InlineKeyboardButton("🔁 Сгенерировать заново", callback_data="regenerate_ai_draft")],
+        [InlineKeyboardButton("✍️ Внести правки через AI", callback_data="revise_ai_draft")],
+        [InlineKeyboardButton("🧩 Перейти в ручной режим", callback_data="switch_manual")]
+    ]
+    await update.message.reply_text(
+        _format_ai_draft(draft),
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return AI_REVIEW
+
+
+async def handle_ai_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Согласование AI-черновика."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "switch_manual":
+        await query.edit_message_text(
+            "🧩 Переход в ручной режим.\n\n"
+            "Шаг 1/11: Введите название розыгрыша:"
+        )
+        return TITLE
+
+    if query.data == "accept_ai_draft":
+        draft = context.user_data.get('ai_draft')
+        if not draft:
+            await query.edit_message_text("❌ Черновик не найден. Отправьте brief заново.")
+            return AI_BRIEF
+
+        context.user_data['giveaway']['title'] = draft.get('title')
+        context.user_data['giveaway']['description'] = draft.get('description')
+        context.user_data['giveaway']['prizes'] = draft.get('prizes')
+        context.user_data['giveaway']['participation_rules'] = draft.get('participation_rules')
+
+        await query.edit_message_text(
+            "✅ Черновик принят и применён.\n\n"
+            "Шаг 4/11: Введите ID каналов и чатов для публикации анонса.\n"
+            "Формат: chat_id через запятую.\n"
+            "Например: -1001234567890, -1009876543210"
+        )
+        return TARGET_CHATS
+
+    if query.data == "regenerate_ai_draft":
+        try:
+            draft = await _generate_ai_draft(context)
+        except Exception as e:
+            logger.error(f"AI regenerate failed: {e}")
+            await query.edit_message_text(
+                "❌ Не удалось перегенерировать черновик.\n"
+                f"Причина: {str(e)}\n\n"
+                "Нажмите /create_giveaway и попробуйте снова."
+            )
+            return ConversationHandler.END
+
+        keyboard = [
+            [InlineKeyboardButton("✅ Принять черновик", callback_data="accept_ai_draft")],
+            [InlineKeyboardButton("🔁 Сгенерировать заново", callback_data="regenerate_ai_draft")],
+            [InlineKeyboardButton("✍️ Внести правки через AI", callback_data="revise_ai_draft")],
+            [InlineKeyboardButton("🧩 Перейти в ручной режим", callback_data="switch_manual")]
+        ]
+        await query.edit_message_text(
+            _format_ai_draft(draft),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return AI_REVIEW
+
+    await query.edit_message_text(
+        "✍️ Напишите, что именно нужно исправить в тексте/условиях.\n"
+        "Пример: \"Сделай текст короче, добавь пункт о подписке на канал и дедлайн\""
+    )
+    return AI_FEEDBACK
+
+
+async def receive_ai_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Применение правок администратора к AI-черновику."""
+    revision_request = update.message.text.strip()
+    if len(revision_request) < 5:
+        await update.message.reply_text("❌ Слишком короткий запрос на правки. Уточните, что изменить.")
+        return AI_FEEDBACK
+
+    try:
+        draft = await _generate_ai_draft(context, revision_request=revision_request)
+    except Exception as e:
+        logger.error(f"AI revise failed: {e}")
+        await update.message.reply_text(
+            "❌ Не удалось применить правки через AI.\n"
+            f"Причина: {str(e)}\n\n"
+            "Напишите правки еще раз или переключитесь в ручной режим."
+        )
+        return AI_FEEDBACK
+
+    keyboard = [
+        [InlineKeyboardButton("✅ Принять черновик", callback_data="accept_ai_draft")],
+        [InlineKeyboardButton("🔁 Сгенерировать заново", callback_data="regenerate_ai_draft")],
+        [InlineKeyboardButton("✍️ Внести правки через AI", callback_data="revise_ai_draft")],
+        [InlineKeyboardButton("🧩 Перейти в ручной режим", callback_data="switch_manual")]
+    ]
+    await update.message.reply_text(
+        _format_ai_draft(draft),
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return AI_REVIEW
 
 
 async def set_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1075,6 +1277,21 @@ def get_giveaway_conversation_handler() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[CommandHandler("create_giveaway", create_giveaway_start)],
         states={
+            MODE_SELECT: [
+                CallbackQueryHandler(handle_creation_mode, pattern="^(creation_manual|creation_ai)$")
+            ],
+            AI_BRIEF: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_ai_brief)
+            ],
+            AI_REVIEW: [
+                CallbackQueryHandler(
+                    handle_ai_review,
+                    pattern="^(accept_ai_draft|regenerate_ai_draft|revise_ai_draft|switch_manual)$"
+                )
+            ],
+            AI_FEEDBACK: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_ai_feedback)
+            ],
             TITLE: [
                 CallbackQueryHandler(navigation_handler, pattern="^(back_to_|next_to_)"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, set_title)

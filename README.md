@@ -66,6 +66,10 @@ cd /Users/aleksandrbatuev/Documents/WORK/Giveaway
    Отредактируйте `.env` и добавьте:
    - `TELEGRAM_BOT_TOKEN` - токен вашего бота от [@BotFather](https://t.me/botfather)
    - `OWNER_ID` - ваш Telegram ID (можно получить у [@userinfobot](https://t.me/userinfobot))
+   - (опционально) параметры AI-режима:
+     - `OLLAMA_ENABLED=true`
+     - `OLLAMA_BASE_URL=http://localhost:11434`
+     - `OLLAMA_MODEL=llama3.1:8b`
 
 4. **Примените миграции базы данных:**
    ```bash
@@ -103,6 +107,10 @@ python run.py
 ## 🎯 Создание розыгрыша
 
 Команда `/create_giveaway` запускает пошаговый мастер:
+
+На первом шаге можно выбрать:
+- `🧩 Самостоятельно` — полностью ручной ввод
+- `🤖 Автоматическое создание (AI)` — генерация названия/описания/призов/условий через Ollama с последующим согласованием и правками
 
 1. **Название** розыгрыша
 2. **Описание** 
