@@ -162,6 +162,10 @@ async def receive_ai_brief(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return AI_BRIEF
 
     context.user_data['ai_brief'] = brief
+    await update.message.reply_text(
+        f"⏳ Генерирую черновик через AI.\n"
+        f"Это может занять до {settings.OLLAMA_TIMEOUT_SECONDS} секунд..."
+    )
 
     try:
         draft = await _generate_ai_draft(context)
@@ -219,6 +223,10 @@ async def handle_ai_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return TARGET_CHATS
 
     if query.data == "regenerate_ai_draft":
+        await query.edit_message_text(
+            f"⏳ Перегенерирую черновик через AI.\n"
+            f"Это может занять до {settings.OLLAMA_TIMEOUT_SECONDS} секунд..."
+        )
         try:
             draft = await _generate_ai_draft(context)
         except Exception as e:
@@ -255,6 +263,11 @@ async def receive_ai_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE
     if len(revision_request) < 5:
         await update.message.reply_text("❌ Слишком короткий запрос на правки. Уточните, что изменить.")
         return AI_FEEDBACK
+
+    await update.message.reply_text(
+        f"⏳ Применяю ваши правки через AI.\n"
+        f"Это может занять до {settings.OLLAMA_TIMEOUT_SECONDS} секунд..."
+    )
 
     try:
         draft = await _generate_ai_draft(context, revision_request=revision_request)
