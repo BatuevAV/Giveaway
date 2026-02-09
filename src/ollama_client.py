@@ -12,6 +12,69 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+def _contains_emoji(text: str) -> bool:
+    """Basic emoji presence check."""
+    if not text:
+        return False
+    for ch in text:
+        if ord(ch) > 0xFFFF:
+            return True
+    return False
+
+
+def _normalize_title(title: str, brief: str = "", raw_response: str = "") -> str:
+    """
+    Make title short and catchy: 2-3 words + emoji.
+    """
+    combined = f"{brief}\n{raw_response}".lower()
+    words = re.findall(r"[A-Za-zА-Яа-яЁё0-9]+", title or "")
+
+    # Prefer season adjective when detected in brief.
+    if "осен" in combined:
+        adjective = "Осенняя"
+        emoji = "🍁"
+    elif "весен" in combined:
+        adjective = "Весенняя"
+        emoji = "🌸"
+    elif "зим" in combined:
+        adjective = "Зимний"
+        emoji = "❄️"
+    elif "лет" in combined:
+        adjective = "Летний"
+        emoji = "☀️"
+    elif any(k in combined for k in ["игр", "гейм", "комп", "клуб"]):
+        adjective = "Жаркий"
+        emoji = "🔥"
+    else:
+        adjective = "Яркий"
+        emoji = "🎁"
+
+    if any(k in combined for k in ["игр", "гейм", "комп", "клуб"]):
+        noun = "Розыгрыш"
+    elif any(k in combined for k in ["сертификат", "подар", "приз", "сувенир"]):
+        noun = "Подаркопад"
+    else:
+        noun = "Розыгрыш"
+
+    # If model already returned short title, keep its words (max 3 words).
+    if 2 <= len(words) <= 3 and len(" ".join(words)) <= 36:
+        base = " ".join(words)
+        base = base[0].upper() + base[1:] if base else base
+    else:
+        base = f"{adjective} {noun}"
+
+    # Keep strict compact format.
+    base_words = base.split()
+    if len(base_words) > 3:
+        base = " ".join(base_words[:3])
+    if len(base_words) < 2:
+        base = f"{adjective} {noun}"
+
+    if not _contains_emoji(base):
+        base = f"{base} {emoji}"
+    return base.strip()
+
+
 def _extract_json_object(text: str) -> Optional[dict]:
     """Try to find and parse the first JSON object in model output."""
     if not text:
@@ -111,12 +174,9 @@ def _build_heuristic_draft_from_brief(brief: str, raw_response: str = "") -> dic
     if not source:
         source = "Розыгрыш для подписчиков сообщества"
 
-    # Title: compact first part of brief.
-    title = source.split(".")[0].split("\n")[0].strip()
-    if len(title) > 90:
-        title = title[:87].rstrip() + "..."
-    if len(title) < 8:
-        title = "Розыгрыш для подписчиков"
+    # Title: catchy compact 2-3 words with emoji.
+    base_title = source.split(".")[0].split("\n")[0].strip()
+    title = _normalize_title(base_title, brief=brief, raw_response=raw_response)
 
     # Simple prizes detection.
     combined = f"{brief}\n{raw_response}".lower()
@@ -286,6 +346,7 @@ class OllamaClient:
             "prizes": str(parsed.get("prizes", "")).strip(),
             "participation_rules": str(parsed.get("participation_rules", "")).strip(),
         }
+        cleaned["title"] = _normalize_title(cleaned["title"], brief=brief, raw_response=raw)
 
         missing = [key for key, value in cleaned.items() if not value]
         if missing:
@@ -351,6 +412,8 @@ class OllamaClient:
             "Generate Russian text for a giveaway draft.",
             "Return strictly JSON object with keys:",
             "title, description, prizes, participation_rules",
+            "Title must be 2-3 words in Russian and include emoji.",
+            "Examples of title style: 'Осенняя лихорадка 🍁', 'Весенняя оттепель 🌸', 'Жаркий розыгрыш 🔥'.",
             "Do not include markdown code fences.",
             "Keep the style clear, practical, and human.",
             "",
