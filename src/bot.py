@@ -73,6 +73,26 @@ class GiveawayBot:
 
         return help_text
 
+    async def _build_start_text(self, user) -> str:
+        """Формирует приветственный текст со статусом пользователя."""
+        from src.permissions import is_admin, is_owner
+
+        user_id = user.id
+        if await is_owner(user_id):
+            status = "Владельцем"
+        elif await is_admin(user_id):
+            status = "Администратором"
+        else:
+            status = "Пользователем"
+
+        first_name = user.first_name or "Пользователь"
+        return (
+            f"Привет, {first_name}! 👋\n\n"
+            f"Вы являетесь {status}.\n\n"
+            "Я бот для проведения розыгрышей.\n"
+            "Выберите действие:"
+        )
+
     def _start_menu_markup(self) -> InlineKeyboardMarkup:
         """Клавиатура стартового меню."""
         keyboard = [
@@ -91,12 +111,8 @@ class GiveawayBot:
             context: Контекст выполнения
         """
         user = update.effective_user
-        await update.message.reply_text(
-            f"Привет, {user.first_name}! 👋\n\n"
-            "Я бот для проведения розыгрышей.\n"
-            "Выберите действие:",
-            reply_markup=self._start_menu_markup()
-        )
+        start_text = await self._build_start_text(user)
+        await update.message.reply_text(start_text, reply_markup=self._start_menu_markup())
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
@@ -127,13 +143,16 @@ class GiveawayBot:
         if action == "start_menu_create":
             text = (
                 "🎉 Создание розыгрыша\n\n"
-                "Для запуска используйте команду: /create_giveaway\n\n"
+                "Нажмите кнопку ниже, чтобы запустить мастер создания.\n\n"
                 "Внутри мастера будут 2 варианта:\n"
                 "1. 🧩 Самостоятельно — ручной ввод всех полей.\n"
                 "2. 🤖 Автоматическое создание (AI) — Ollama генерирует название, описание, призы и условия, "
                 "после чего вы можете согласовать или отправить на доработку."
             )
-            keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="start_menu_back")]]
+            keyboard = [
+                [InlineKeyboardButton("🚀 Запустить создание", switch_inline_query_current_chat="/create_giveaway")],
+                [InlineKeyboardButton("⬅️ Назад", callback_data="start_menu_back")]
+            ]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
             return
 
@@ -174,12 +193,8 @@ class GiveawayBot:
 
         if action == "start_menu_back":
             user = update.effective_user
-            await query.edit_message_text(
-                f"Привет, {user.first_name}! 👋\n\n"
-                "Я бот для проведения розыгрышей.\n"
-                "Выберите действие:",
-                reply_markup=self._start_menu_markup()
-            )
+            start_text = await self._build_start_text(user)
+            await query.edit_message_text(start_text, reply_markup=self._start_menu_markup())
     
     def setup_handlers(self) -> None:
         """Настройка обработчиков команд."""
