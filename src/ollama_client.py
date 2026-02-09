@@ -102,6 +102,52 @@ def _extract_sections_fallback(text: str) -> Optional[dict]:
     return None
 
 
+def _build_heuristic_draft_from_brief(brief: str, raw_response: str = "") -> dict:
+    """
+    Last-resort fallback: build a valid draft from user brief
+    so flow can continue even if model response is unstructured.
+    """
+    source = (brief or "").strip()
+    if not source:
+        source = "Розыгрыш для подписчиков сообщества"
+
+    # Title: compact first part of brief.
+    title = source.split(".")[0].split("\n")[0].strip()
+    if len(title) > 90:
+        title = title[:87].rstrip() + "..."
+    if len(title) < 8:
+        title = "Розыгрыш для подписчиков"
+
+    # Simple prizes detection.
+    combined = f"{brief}\n{raw_response}".lower()
+    prizes_parts = []
+    if "сертификат" in combined:
+        prizes_parts.append("Сертификат на 500 ₽ в компьютерный клуб")
+    if "сувенир" in combined:
+        prizes_parts.append("Фирменные сувениры клуба")
+    if not prizes_parts:
+        prizes_parts.append("Подарки от организатора")
+    prizes = ", ".join(prizes_parts)
+
+    description = (
+        "Мы подготовили розыгрыш для подписчиков нашего сообщества.\n"
+        "Подробности и условия участия — ниже."
+    )
+
+    rules = (
+        "1) Быть подписанным на канал/сообщество клуба.\n"
+        "2) Нажать кнопку участия под постом розыгрыша.\n"
+        "3) Дождаться окончания розыгрыша и объявления результатов."
+    )
+
+    return {
+        "title": title,
+        "description": description,
+        "prizes": prizes,
+        "participation_rules": rules,
+    }
+
+
 class OllamaClient:
     """Minimal async Ollama HTTP client."""
 
@@ -228,7 +274,11 @@ class OllamaClient:
         if not parsed:
             parsed = _extract_sections_fallback(raw)
         if not parsed:
-            raise RuntimeError("AI returned non-JSON response")
+            logger.warning(
+                "Ollama response is non-JSON and non-sectioned. Using heuristic draft. Raw sample: %s",
+                (raw or "")[:500]
+            )
+            parsed = _build_heuristic_draft_from_brief(brief=brief, raw_response=raw)
 
         cleaned = {
             "title": str(parsed.get("title", "")).strip(),
