@@ -1,15 +1,20 @@
 """Точка входа для запуска бота."""
 
 import asyncio
+import logging
 import sys
-from src.bot import GiveawayBot
-from src.database import Database
-from src.scheduler import GiveawayScheduler
 from config import settings
+from src.logging_security import setup_secure_logging
 
 
 async def main():
     """Главная функция."""
+    setup_secure_logging(logging.INFO)
+
+    from src.bot import GiveawayBot
+    from src.database import Database
+    from src.scheduler import GiveawayScheduler
+
     # Валидация настроек
     if not settings.validate():
         sys.exit(1)
