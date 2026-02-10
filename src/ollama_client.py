@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import ast
+import hashlib
 from typing import Optional
 
 import httpx
@@ -28,33 +29,76 @@ def _normalize_title(title: str, brief: str = "", raw_response: str = "") -> str
     """
     combined = f"{brief}\n{raw_response}".lower()
     words = re.findall(r"[A-Za-zА-Яа-яЁё0-9]+", title or "")
+    seed_input = f"{combined}|{title}".encode("utf-8", errors="ignore")
+    seed = int(hashlib.md5(seed_input).hexdigest()[:8], 16)
 
-    # Prefer season adjective when detected in brief.
-    if "осен" in combined:
-        adjective = "Осенняя"
-        emoji = "🍁"
-    elif "весен" in combined:
-        adjective = "Весенняя"
-        emoji = "🌸"
-    elif "зим" in combined:
-        adjective = "Зимний"
-        emoji = "❄️"
-    elif "лет" in combined:
-        adjective = "Летний"
-        emoji = "☀️"
-    elif any(k in combined for k in ["игр", "гейм", "комп", "клуб"]):
-        adjective = "Жаркий"
-        emoji = "🔥"
-    else:
-        adjective = "Яркий"
-        emoji = "🎁"
+    def pick(options: list[str], shift: int = 0) -> str:
+        if not options:
+            return ""
+        return options[(seed + shift) % len(options)]
 
-    if any(k in combined for k in ["игр", "гейм", "комп", "клуб"]):
-        noun = "Розыгрыш"
-    elif any(k in combined for k in ["сертификат", "подар", "приз", "сувенир"]):
-        noun = "Подаркопад"
-    else:
-        noun = "Розыгрыш"
+    season_themes = {
+        "autumn": {
+            "keys": ["осен", "сентябр", "октябр", "ноябр"],
+            "adjectives": ["Осенняя", "Золотая", "Листопадная", "Уютная"],
+            "nouns": ["лихорадка", "оттепель", "волна", "охота", "удача"],
+            "emoji": ["🍁", "🧡", "🍂"],
+        },
+        "spring": {
+            "keys": ["весен", "март", "апрел", "май"],
+            "adjectives": ["Весенняя", "Цветущая", "Свежая", "Солнечная"],
+            "nouns": ["оттепель", "волна", "удача", "перезагрузка", "охота"],
+            "emoji": ["🌸", "🌿", "☀️"],
+        },
+        "winter": {
+            "keys": ["зим", "декабр", "январ", "феврал", "новогод"],
+            "adjectives": ["Зимняя", "Снежная", "Морозная", "Праздничная"],
+            "nouns": ["сказка", "удача", "лихорадка", "охота", "раздача"],
+            "emoji": ["❄️", "🎄", "☃️"],
+        },
+        "summer": {
+            "keys": ["лет", "июн", "июл", "август"],
+            "adjectives": ["Летняя", "Жаркая", "Солнечная", "Яркая"],
+            "nouns": ["раздача", "волна", "удача", "лихорадка", "охота"],
+            "emoji": ["☀️", "🌴", "🔥"],
+        },
+    }
+
+    gaming_theme = {
+        "keys": ["игр", "гейм", "комп", "клуб", "steam", "кибер", "pc", "пк"],
+        "adjectives": ["Жаркий", "Игровой", "Кибер", "Турбо", "Легендарный"],
+        "nouns": ["розыгрыш", "джекпот", "дроп", "буст", "рейд"],
+        "emoji": ["🔥", "🎮", "⚡"],
+    }
+
+    prize_theme = {
+        "keys": ["сертификат", "подар", "приз", "сувенир", "бонус", "купон"],
+        "adjectives": ["Щедрый", "Подарочный", "Призовой", "Большой", "Удачный"],
+        "nouns": ["розыгрыш", "подаркопад", "джекпот", "раздача", "бонус"],
+        "emoji": ["🎁", "🏆", "✨"],
+    }
+
+    default_theme = {
+        "adjectives": ["Яркий", "Большой", "Горячий", "Супер", "Быстрый", "Мощный"],
+        "nouns": ["розыгрыш", "джекпот", "подаркопад", "старт", "бонус"],
+        "emoji": ["🎁", "✨", "🔥"],
+    }
+
+    chosen = None
+    for theme in season_themes.values():
+        if any(k in combined for k in theme["keys"]):
+            chosen = theme
+            break
+    if not chosen and any(k in combined for k in gaming_theme["keys"]):
+        chosen = gaming_theme
+    if not chosen and any(k in combined for k in prize_theme["keys"]):
+        chosen = prize_theme
+    if not chosen:
+        chosen = default_theme
+
+    adjective = pick(chosen["adjectives"])
+    noun = pick(chosen["nouns"], shift=3)
+    emoji = pick(chosen["emoji"], shift=5)
 
     # If model already returned short title, keep its words (max 3 words).
     if 2 <= len(words) <= 3 and len(" ".join(words)) <= 36:
