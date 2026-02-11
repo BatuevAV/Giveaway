@@ -75,6 +75,7 @@ async def create_giveaway_start(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data['giveaway'] = {}
     context.user_data.pop('ai_brief', None)
     context.user_data.pop('ai_draft', None)
+    context.user_data['awaiting_required_channels_input'] = False
     await update.message.reply_text(
         "🎉 Создание нового розыгрыша\n\n"
         "Выберите режим создания:",
@@ -92,6 +93,7 @@ async def start_create_from_menu(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data['giveaway'] = {}
     context.user_data.pop('ai_brief', None)
     context.user_data.pop('ai_draft', None)
+    context.user_data['awaiting_required_channels_input'] = False
 
     await query.edit_message_text(
         "🎉 Создание нового розыгрыша\n\n"
@@ -566,6 +568,7 @@ async def set_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Установка условий участия."""
     rules = update.message.text.strip()
     context.user_data['giveaway']['participation_rules'] = rules
+    context.user_data['awaiting_required_channels_input'] = False
     
     keyboard = [
         [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_max_participants")],
@@ -592,6 +595,7 @@ async def handle_required_channels_choice(update: Update, context: ContextTypes.
     
     if query.data == "skip_required_channels":
         context.user_data['giveaway']['required_channels'] = None
+        context.user_data['awaiting_required_channels_input'] = False
         
         keyboard = [
             [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_rules")],
@@ -607,6 +611,7 @@ async def handle_required_channels_choice(update: Update, context: ContextTypes.
         )
         return START_DATE
     
+    context.user_data['awaiting_required_channels_input'] = True
     await query.edit_message_text(
         "Отправьте chat_id каналов через запятую\n\n"
         "Пример: -1001234567890, -1009876543210\n\n"
@@ -626,6 +631,7 @@ async def set_required_channels(update: Update, context: ContextTypes.DEFAULT_TY
         # Парсим список chat_id
         channels = [int(ch.strip()) for ch in channels_str.split(',')]
         context.user_data['giveaway']['required_channels'] = channels
+        context.user_data['awaiting_required_channels_input'] = False
         
         keyboard = [
             [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_rules")],
@@ -647,6 +653,13 @@ async def set_required_channels(update: Update, context: ContextTypes.DEFAULT_TY
             "Пример: -1001234567890, -1009876543210"
         )
         return RULES
+
+
+async def rules_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Роутер текстового ввода на шаге RULES."""
+    if context.user_data.get('awaiting_required_channels_input'):
+        return await set_required_channels(update, context)
+    return await set_rules(update, context)
 
 
 async def handle_start_date_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1310,11 +1323,16 @@ async def navigation_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     elif action == "next_to_rules":
         # Если администратор нажал "Далее", применяем стандартные условия
         # и сразу переводим на следующий шаг, чтобы не зависать на вводе текста.
-        giveaway['participation_rules'] = (
-            "1) Подписаться на канал.\n"
-            "2) Нажать кнопку участия под постом розыгрыша.\n"
-            "3) Дождаться публикации результатов."
-        )
+        if not giveaway.get('participation_rules'):
+            giveaway['participation_rules'] = (
+                "1) Подписаться на канал.\n"
+                "2) Нажать кнопку участия под постом розыгрыша.\n"
+                "3) Дождаться публикации результатов."
+            )
+            status_text = "✅ Условия участия сохранены (стандартные)\n\n"
+        else:
+            status_text = "✅ Условия участия уже заполнены\n\n"
+        context.user_data['awaiting_required_channels_input'] = False
         keyboard = [
             [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_rules")],
             [InlineKeyboardButton("➕ Добавить обязательные каналы", callback_data="add_required_channels")],
@@ -1322,7 +1340,7 @@ async def navigation_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         ]
         reply_markup = _with_cancel_button(keyboard)
         await query.edit_message_text(
-            "✅ Условия участия сохранены (стандартные)\n\n"
+            status_text +
             "Хотите добавить обязательные каналы для подписки?\n\n"
             "Если выберете 'Добавить', отправьте chat_id каналов через запятую.\n"
             "Например: -1001234567890, -1009876543210",
@@ -1404,9 +1422,7 @@ def get_giveaway_conversation_handler() -> ConversationHandler:
             RULES: [
                 CallbackQueryHandler(navigation_handler, pattern="^(back_to_|next_to_)"),
                 CallbackQueryHandler(handle_required_channels_choice, pattern="^(add_required_channels|skip_required_channels)$"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, lambda update, context: 
-                    set_required_channels(update, context) if context.user_data.get('giveaway', {}).get('participation_rules') 
-                    else set_rules(update, context))
+                MessageHandler(filters.TEXT & ~filters.COMMAND, rules_text_router)
             ],
             START_DATE: [
                 CallbackQueryHandler(navigation_handler, pattern="^(back_to_|next_to_)"),
