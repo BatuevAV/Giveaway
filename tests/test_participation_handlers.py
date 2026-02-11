@@ -299,3 +299,15 @@ def test_ollama_normalize_description_syncs_with_prize():
         "Игровая компьютерная мышь",
     )
     assert "мыш" in desc.lower()
+
+
+def test_ollama_normalize_prizes_fixes_mixed_script_word():
+    """Mixed кириллица/латиница в слове должна исправляться."""
+    from src.ollama_client import _normalize_prizes
+
+    prize = _normalize_prizes(
+        "Компьюterная мышь",
+        brief="Для компьютерного клуба, приз: компьютерная мышь",
+        raw_response="",
+    )
+    assert "компьютерная" in prize.lower()

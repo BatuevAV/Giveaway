@@ -17,6 +17,47 @@ def _clean_spaces(value: str) -> str:
     return re.sub(r"\s+", " ", (value or "")).strip()
 
 
+def _has_cyrillic(text: str) -> bool:
+    return bool(re.search(r"[А-Яа-яЁё]", text or ""))
+
+
+def _has_latin(text: str) -> bool:
+    return bool(re.search(r"[A-Za-z]", text or ""))
+
+
+def _normalize_mixed_script_text(text: str) -> str:
+    """
+    Fix mixed Cyrillic/Latin lookalike letters in one word:
+    e.g. 'Компьюterная' -> 'Компьютerная' -> 'Компьютерная'
+    """
+    if not text:
+        return text
+
+    mapping = str.maketrans({
+        "a": "а", "A": "А",
+        "e": "е", "E": "Е",
+        "o": "о", "O": "О",
+        "p": "р", "P": "Р",
+        "c": "с", "C": "С",
+        "x": "х", "X": "Х",
+        "y": "у", "Y": "У",
+        "k": "к", "K": "К",
+        "m": "м", "M": "М",
+        "t": "т", "T": "Т",
+        "b": "в", "B": "В",
+        "h": "н", "H": "Н",
+        "r": "р", "R": "Р",
+    })
+
+    def fix_word(match: re.Match) -> str:
+        word = match.group(0)
+        if _has_cyrillic(word) and _has_latin(word):
+            return word.translate(mapping)
+        return word
+
+    return re.sub(r"\b[\w-]+\b", fix_word, text)
+
+
 def _contains_emoji(text: str) -> bool:
     """Basic emoji presence check."""
     if not text:
@@ -47,7 +88,7 @@ def _contains_expensive_prize(text: str) -> bool:
     return any(
         key in value
         for key in [
-            "ноутбук", "laptop", "iphone", "айфон", "смартфон", "пк", "компьютер", "ps5",
+            "ноутбук", "laptop", "iphone", "айфон", "смартфон", "ps5",
             "playstation", "xbox", "nintendo", "монитор", "видеокарт", "rtx", "macbook",
         ]
     )
@@ -255,7 +296,7 @@ def _extract_single_prize_text(text: str) -> str:
 
     # Cleanup wrappers.
     value = value.strip(" -•")
-    return value
+    return _normalize_mixed_script_text(value)
 
 
 def _normalize_prizes(prizes_value, brief: str = "", raw_response: str = "") -> str:
@@ -270,23 +311,23 @@ def _normalize_prizes(prizes_value, brief: str = "", raw_response: str = "") -> 
             if is_club and _contains_expensive_prize(text):
                 return _club_certificate_prizes()
             if explicit_hint and "сертификат" in text.lower() and "сертификат" not in explicit_hint.lower():
-                return explicit_hint
-            return text
+                return _normalize_mixed_script_text(explicit_hint)
+            return _normalize_mixed_script_text(text)
     elif isinstance(prizes_value, dict):
         text = _format_prize_items([prizes_value], single_only=True)
         if text:
             if is_club and _contains_expensive_prize(text):
                 return _club_certificate_prizes()
             if explicit_hint and "сертификат" in text.lower() and "сертификат" not in explicit_hint.lower():
-                return explicit_hint
-            return text
+                return _normalize_mixed_script_text(explicit_hint)
+            return _normalize_mixed_script_text(text)
 
     text = str(prizes_value or "").strip()
     if not text:
         combined = combined_ctx.lower()
         if is_club:
             hint = explicit_hint or _extract_prize_hint_from_context(combined_ctx)
-            return hint or _club_certificate_prizes()
+            return _normalize_mixed_script_text(hint or _club_certificate_prizes())
         if "сертификат" in combined:
             return "Сертификат на 500 ₽ в компьютерный клуб"
         if "сувенир" in combined:
@@ -309,7 +350,7 @@ def _normalize_prizes(prizes_value, brief: str = "", raw_response: str = "") -> 
         if decoded:
             if is_club and _contains_expensive_prize(decoded):
                 return _club_certificate_prizes()
-            return decoded
+            return _normalize_mixed_script_text(decoded)
 
     normalized = _extract_single_prize_text(text)
     if is_club:
@@ -317,13 +358,13 @@ def _normalize_prizes(prizes_value, brief: str = "", raw_response: str = "") -> 
         if _contains_expensive_prize(normalized):
             return _club_certificate_prizes()
         if explicit_hint and "сертификат" in normalized.lower() and "сертификат" not in explicit_hint.lower():
-            return explicit_hint
-    return normalized
+            return _normalize_mixed_script_text(explicit_hint)
+    return _normalize_mixed_script_text(normalized)
 
 
 def _normalize_description(description: str, prizes: str) -> str:
     """Fix awkward wording and keep text concise."""
-    text = str(description or "").strip()
+    text = _normalize_mixed_script_text(str(description or "").strip())
     if not text:
         text = "Участвуйте в розыгрыше и получайте призы от клуба."
 

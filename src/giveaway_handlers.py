@@ -52,6 +52,19 @@ def _creation_mode_markup() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🧩 Самостоятельно", callback_data="creation_manual")],
         [InlineKeyboardButton("🤖 Автоматическое создание (AI)", callback_data="creation_ai")]
     ]
+    return _with_cancel_button(keyboard)
+
+
+def _with_cancel_button(keyboard: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
+    """Добавляет кнопку отмены создания, если ее еще нет в клавиатуре."""
+    existing_callbacks = {
+        btn.callback_data
+        for row in keyboard
+        for btn in row
+        if getattr(btn, "callback_data", None)
+    }
+    if "cancel_creation" not in existing_callbacks and "cancel_giveaway" not in existing_callbacks:
+        keyboard = keyboard + [[InlineKeyboardButton("❌ Отменить создание", callback_data="cancel_creation")]]
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -188,7 +201,7 @@ async def receive_ai_brief(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     ]
     await update.message.reply_text(
         _format_ai_draft(draft),
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        reply_markup=_with_cancel_button(keyboard)
     )
     return AI_REVIEW
 
@@ -248,7 +261,7 @@ async def handle_ai_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         ]
         await query.edit_message_text(
             _format_ai_draft(draft),
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            reply_markup=_with_cancel_button(keyboard)
         )
         return AI_REVIEW
 
@@ -290,7 +303,7 @@ async def receive_ai_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE
     ]
     await update.message.reply_text(
         _format_ai_draft(draft),
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        reply_markup=_with_cancel_button(keyboard)
     )
     return AI_REVIEW
 
@@ -306,7 +319,7 @@ async def set_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['giveaway']['title'] = title
     
     keyboard = [[InlineKeyboardButton("➡️ Далее", callback_data="next_to_description")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = _with_cancel_button(keyboard)
     
     await update.message.reply_text(
         f"✅ Название: {title}\n\n"
@@ -326,7 +339,7 @@ async def set_description(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_title")],
         [InlineKeyboardButton("➡️ Далее", callback_data="next_to_prizes")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = _with_cancel_button(keyboard)
     
     await update.message.reply_text(
         f"✅ Описание сохранено\n\n"
@@ -346,7 +359,7 @@ async def set_prizes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_description")],
         [InlineKeyboardButton("➡️ Далее", callback_data="next_to_target_chats")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = _with_cancel_button(keyboard)
     
     await update.message.reply_text(
         "✅ Призы сохранены\n\n"
@@ -377,7 +390,7 @@ async def set_target_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             [InlineKeyboardButton("📷 Загрузить картинку", callback_data="upload_image")],
             [InlineKeyboardButton("⏭ Пропустить картинку", callback_data="skip_image")]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = _with_cancel_button(keyboard)
         
         await update.message.reply_text(
             f"✅ Сохранено {len(chat_ids)} чат(ов)\n\n"
@@ -438,7 +451,7 @@ async def set_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_target_chats")],
                 [InlineKeyboardButton("➡️ Далее", callback_data="next_to_winners")]
             ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
+            reply_markup = _with_cancel_button(keyboard)
             
             await update.message.reply_text(
                 f"✅ Картинка сохранена (размер: {file_size_mb:.1f} MB)\n\n"
@@ -475,7 +488,7 @@ async def set_winners_count(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             [InlineKeyboardButton("♾ Без ограничений", callback_data="unlimited_participants")],
             [InlineKeyboardButton("📝 Указать число", callback_data="set_max_participants")]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = _with_cancel_button(keyboard)
         
         await update.message.reply_text(
             f"✅ Количество победителей: {winners_count}\n\n"
@@ -504,7 +517,7 @@ async def handle_max_participants_choice(update: Update, context: ContextTypes.D
             [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_winners")],
             [InlineKeyboardButton("➡️ Далее", callback_data="next_to_rules")]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = _with_cancel_button(keyboard)
         
         await query.edit_message_text(
             "✅ Без ограничений по участникам\n\n"
@@ -532,7 +545,7 @@ async def set_max_participants(update: Update, context: ContextTypes.DEFAULT_TYP
             [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_winners")],
             [InlineKeyboardButton("➡️ Далее", callback_data="next_to_rules")]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = _with_cancel_button(keyboard)
         
         await update.message.reply_text(
             f"✅ Максимум участников: {max_participants}\n\n"
@@ -559,7 +572,7 @@ async def set_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         [InlineKeyboardButton("➕ Добавить обязательные каналы", callback_data="add_required_channels")],
         [InlineKeyboardButton("⏭ Пропустить", callback_data="skip_required_channels")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = _with_cancel_button(keyboard)
     
     await update.message.reply_text(
         "✅ Условия участия сохранены\n\n"
@@ -585,7 +598,7 @@ async def handle_required_channels_choice(update: Update, context: ContextTypes.
             [InlineKeyboardButton("🕐 Сейчас", callback_data="start_now")],
             [InlineKeyboardButton("📅 Указать дату и время", callback_data="set_start_date")]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = _with_cancel_button(keyboard)
         
         await query.edit_message_text(
             "⏭ Обязательные каналы не указаны\n\n"
@@ -619,7 +632,7 @@ async def set_required_channels(update: Update, context: ContextTypes.DEFAULT_TY
             [InlineKeyboardButton("🕐 Сейчас", callback_data="start_now")],
             [InlineKeyboardButton("📅 Указать дату и время", callback_data="set_start_date")]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = _with_cancel_button(keyboard)
         
         await update.message.reply_text(
             f"✅ Добавлено обязательных каналов: {len(channels)}\n\n"
@@ -687,7 +700,7 @@ async def set_start_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 row.append(InlineKeyboardButton(hours[i+1], callback_data=f"start_time_{hours[i+1]}"))
             keyboard.append(row)
         keyboard.append([InlineKeyboardButton("⌨️ Ввести своё время", callback_data="start_time_custom")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = _with_cancel_button(keyboard)
         
         await query.edit_message_text(
             f"✅ Дата начала: {result.strftime('%d.%m.%Y')}\n\n"
@@ -804,7 +817,7 @@ async def set_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
                 row.append(InlineKeyboardButton(hours[i+1], callback_data=f"end_time_{hours[i+1]}"))
             keyboard.append(row)
         keyboard.append([InlineKeyboardButton("⌨️ Ввести своё время", callback_data="end_time_custom")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = _with_cancel_button(keyboard)
         
         await query.edit_message_text(
             f"✅ Дата окончания: {result.strftime('%d.%m.%Y')}\n\n"
@@ -849,7 +862,7 @@ async def set_end_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         [InlineKeyboardButton("📅 Указать дату и время", callback_data="set_announce_date")],
         [InlineKeyboardButton("⏭ Без анонса", callback_data="skip_announce")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = _with_cancel_button(keyboard)
     
     await query.edit_message_text(
         f"✅ Дата окончания: {end_datetime.strftime('%d.%m.%Y %H:%M')}\n\n"
@@ -887,7 +900,7 @@ async def set_end_time_custom(update: Update, context: ContextTypes.DEFAULT_TYPE
             [InlineKeyboardButton("📅 Указать дату и время", callback_data="set_announce_date")],
             [InlineKeyboardButton("⏭ Без анонса", callback_data="skip_announce")]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = _with_cancel_button(keyboard)
         
         await update.message.reply_text(
             f"✅ Дата окончания: {end_datetime.strftime('%d.%m.%Y %H:%M')}\n\n"
@@ -961,7 +974,7 @@ async def set_announce_date(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 row.append(InlineKeyboardButton(hours[i+1], callback_data=f"announce_time_{hours[i+1]}"))
             keyboard.append(row)
         keyboard.append([InlineKeyboardButton("⌨️ Ввести своё время", callback_data="announce_time_custom")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = _with_cancel_button(keyboard)
         
         await query.edit_message_text(
             f"✅ Дата анонса: {result.strftime('%d.%m.%Y')}\n\n"
@@ -1097,7 +1110,7 @@ async def show_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         [InlineKeyboardButton("✅ Подтвердить и сохранить", callback_data="confirm_giveaway")],
         [InlineKeyboardButton("❌ Отменить", callback_data="cancel_giveaway")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = _with_cancel_button(keyboard)
     
     # Отправляем превью
     if giveaway.get('image_file_id'):
@@ -1172,6 +1185,15 @@ async def confirm_giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def cancel_giveaway_creation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Отмена создания розыгрыша."""
     await update.message.reply_text("❌ Создание розыгрыша отменено.")
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+async def cancel_giveaway_creation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Отмена создания розыгрыша через inline-кнопку на любом этапе."""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("❌ Создание розыгрыша отменено.")
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -1270,7 +1292,7 @@ async def navigation_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             [InlineKeyboardButton("📷 Загрузить картинку", callback_data="upload_image")],
             [InlineKeyboardButton("⏭ Пропустить картинку", callback_data="skip_image")]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = _with_cancel_button(keyboard)
         await query.edit_message_text(
             "Шаг 5/11: Хотите добавить картинку к розыгрышу?",
             reply_markup=reply_markup
@@ -1298,7 +1320,7 @@ async def navigation_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             [InlineKeyboardButton("♾ Без ограничений", callback_data="unlimited_participants")],
             [InlineKeyboardButton("📝 Указать число", callback_data="set_max_participants")]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = _with_cancel_button(keyboard)
         await query.edit_message_text(
             "Шаг 7/11: Установить максимальное количество участников?",
             reply_markup=reply_markup
@@ -1401,6 +1423,9 @@ def get_giveaway_conversation_handler() -> ConversationHandler:
             ],
             PREVIEW: [CallbackQueryHandler(confirm_giveaway, pattern="^(confirm_giveaway|cancel_giveaway)$")]
         },
-        fallbacks=[CommandHandler("cancel", cancel_giveaway_creation)],
+        fallbacks=[
+            CommandHandler("cancel", cancel_giveaway_creation),
+            CallbackQueryHandler(cancel_giveaway_creation_callback, pattern="^cancel_creation$")
+        ],
         per_message=False
     )
