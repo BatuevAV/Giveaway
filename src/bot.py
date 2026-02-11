@@ -1,6 +1,7 @@
 """Основной модуль бота для розыгрышей."""
 
 import logging
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
@@ -101,9 +102,83 @@ class GiveawayBot:
         if is_user_admin:
             keyboard.append([InlineKeyboardButton("🎉 Создать розыгрыш", callback_data="start_menu_create")])
             keyboard.append([InlineKeyboardButton("📋 Список розыгрышей", callback_data="start_menu_list")])
+            keyboard.append([InlineKeyboardButton("👥 Проверить участников", callback_data="start_menu_participants")])
         else:
             keyboard.append([InlineKeyboardButton("🔎 Проверить участие", callback_data="start_menu_check_participation")])
         return InlineKeyboardMarkup(keyboard)
+
+    def _is_current_active_giveaway(self, giveaway) -> bool:
+        """Проверка, что розыгрыш активен по флагу и времени."""
+        if not giveaway or not giveaway.is_active:
+            return False
+        now = datetime.utcnow()
+        if giveaway.starts_at and giveaway.starts_at > now:
+            return False
+        if giveaway.ends_at and giveaway.ends_at <= now:
+            return False
+        return True
+
+    async def _get_current_active_giveaways(self) -> list:
+        """Получает текущие активные розыгрыши."""
+        db = Database(settings.DATABASE_URL)
+        try:
+            giveaways = await db.get_active_giveaways()
+            return [g for g in giveaways if self._is_current_active_giveaway(g)]
+        finally:
+            await db.close()
+
+    async def _show_participants_for_giveaway(self, query, giveaway_id: int) -> None:
+        """Показывает количество участников по выбранному розыгрышу."""
+        db = Database(settings.DATABASE_URL)
+        try:
+            giveaway = await db.get_giveaway_by_id(giveaway_id)
+            if not giveaway or not self._is_current_active_giveaway(giveaway):
+                await query.edit_message_text(
+                    "❌ Розыгрыш не найден или уже неактивен.",
+                    reply_markup=InlineKeyboardMarkup(
+                        [[InlineKeyboardButton("⬅️ К списку", callback_data="start_menu_participants_list")]]
+                    )
+                )
+                return
+
+            participants_count = await db.get_participants_count(giveaway_id)
+            text = (
+                f"👥 <b>Количество участников</b>\n\n"
+                f"🎉 <b>{giveaway.title}</b>\n"
+                f"Участников: <b>{participants_count}</b>\n"
+                f"Победителей: <b>{giveaway.winners_count}</b>\n"
+            )
+            keyboard = [[InlineKeyboardButton("⬅️ К списку", callback_data="start_menu_participants_list")]]
+            await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        finally:
+            await db.close()
+
+    async def _show_active_giveaways_for_participants(self, query) -> None:
+        """Показывает список активных розыгрышей для выбора."""
+        current_giveaways = await self._get_current_active_giveaways()
+
+        if not current_giveaways:
+            await query.edit_message_text(
+                "ℹ️ Сейчас нет активных розыгрышей.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("⬅️ Назад", callback_data="start_menu_back")]]
+                )
+            )
+            return
+
+        if len(current_giveaways) == 1:
+            await self._show_participants_for_giveaway(query, current_giveaways[0].id)
+            return
+
+        keyboard = [
+            [InlineKeyboardButton(f"🎉 {g.title[:45]}", callback_data=f"start_menu_participants_{g.id}")]
+            for g in current_giveaways[:20]
+        ]
+        keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="start_menu_back")])
+        await query.edit_message_text(
+            "📋 Выберите розыгрыш для проверки количества участников:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
@@ -164,6 +239,37 @@ class GiveawayBot:
                 [InlineKeyboardButton("⬅️ Назад", callback_data="start_menu_back")]
             ]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+
+        if action == "start_menu_participants":
+            if not is_user_admin:
+                await query.edit_message_text(
+                    "⛔️ Проверка количества участников доступна только администраторам.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="start_menu_back")]])
+                )
+                return
+            await self._show_active_giveaways_for_participants(query)
+            return
+
+        if action == "start_menu_participants_list":
+            if not is_user_admin:
+                await query.edit_message_text(
+                    "⛔️ Проверка количества участников доступна только администраторам.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="start_menu_back")]])
+                )
+                return
+            await self._show_active_giveaways_for_participants(query)
+            return
+
+        if action.startswith("start_menu_participants_"):
+            if not is_user_admin:
+                await query.edit_message_text(
+                    "⛔️ Проверка количества участников доступна только администраторам.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="start_menu_back")]])
+                )
+                return
+            giveaway_id = int(action.split("_")[-1])
+            await self._show_participants_for_giveaway(query, giveaway_id)
             return
 
         if action == "start_menu_check_participation":
