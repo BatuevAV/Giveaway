@@ -90,13 +90,19 @@ class GiveawayBot:
             "Выберите действие:"
         )
 
-    def _start_menu_markup(self) -> InlineKeyboardMarkup:
-        """Клавиатура стартового меню."""
-        keyboard = [
-            [InlineKeyboardButton("❓ Помощь", callback_data="start_menu_help")],
-            [InlineKeyboardButton("🎉 Создать розыгрыш", callback_data="start_menu_create")],
-            [InlineKeyboardButton("📋 Список розыгрышей", callback_data="start_menu_list")]
-        ]
+    async def _start_menu_markup(self, user_id: int) -> InlineKeyboardMarkup:
+        """Клавиатура стартового меню с учетом роли пользователя."""
+        from src.permissions import is_admin, is_owner
+
+        is_user_admin = await is_admin(user_id) or await is_owner(user_id)
+
+        keyboard = [[InlineKeyboardButton("❓ Помощь", callback_data="start_menu_help")]]
+
+        if is_user_admin:
+            keyboard.append([InlineKeyboardButton("🎉 Создать розыгрыш", callback_data="start_menu_create")])
+            keyboard.append([InlineKeyboardButton("📋 Список розыгрышей", callback_data="start_menu_list")])
+        else:
+            keyboard.append([InlineKeyboardButton("🔎 Проверить участие", callback_data="start_menu_check_participation")])
         return InlineKeyboardMarkup(keyboard)
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -109,7 +115,7 @@ class GiveawayBot:
         """
         user = update.effective_user
         start_text = await self._build_start_text(user)
-        await update.message.reply_text(start_text, reply_markup=self._start_menu_markup())
+        await update.message.reply_text(start_text, reply_markup=await self._start_menu_markup(user.id))
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
@@ -124,12 +130,13 @@ class GiveawayBot:
 
     async def start_menu_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Обработка кнопок стартового меню."""
-        from src.permissions import is_admin
+        from src.permissions import is_admin, is_owner
 
         query = update.callback_query
         await query.answer()
         action = query.data
         user_id = update.effective_user.id
+        is_user_admin = await is_admin(user_id) or await is_owner(user_id)
 
         if action == "start_menu_help":
             help_text = await self._build_help_text(user_id)
@@ -138,6 +145,12 @@ class GiveawayBot:
             return
 
         if action == "start_menu_create":
+            if not is_user_admin:
+                await query.edit_message_text(
+                    "⛔️ Создание розыгрышей доступно только администраторам.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="start_menu_back")]])
+                )
+                return
             text = (
                 "🎉 Создание розыгрыша\n\n"
                 "Нажмите кнопку ниже, чтобы запустить мастер создания.\n\n"
@@ -153,8 +166,16 @@ class GiveawayBot:
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
             return
 
+        if action == "start_menu_check_participation":
+            await query.edit_message_text(
+                "🔎 Проверка участия\n\n"
+                "Нажмите команду /my_participation, чтобы посмотреть статус участия "
+                "в текущих активных розыгрышах."
+            )
+            return
+
         if action == "start_menu_list":
-            if not await is_admin(user_id):
+            if not is_user_admin:
                 await query.edit_message_text(
                     "⛔️ Список розыгрышей доступен только администраторам.\n\n"
                     "Если у вас есть права администратора, используйте /list_giveaways.",
@@ -191,7 +212,7 @@ class GiveawayBot:
         if action == "start_menu_back":
             user = update.effective_user
             start_text = await self._build_start_text(user)
-            await query.edit_message_text(start_text, reply_markup=self._start_menu_markup())
+            await query.edit_message_text(start_text, reply_markup=await self._start_menu_markup(user.id))
     
     def setup_handlers(self) -> None:
         """Настройка обработчиков команд."""
