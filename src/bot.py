@@ -393,9 +393,6 @@ class GiveawayBot:
         commands = [
             BotCommand("start", "Главное меню"),
             BotCommand("help", "Помощь"),
-            BotCommand("my_participation", "Проверить мое участие"),
-            BotCommand("create_giveaway", "Создать розыгрыш"),
-            BotCommand("list_giveaways", "Список розыгрышей"),
         ]
         await self.application.bot.set_my_commands(commands)
         logger.info("Telegram bot commands menu configured")
