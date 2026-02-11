@@ -23,6 +23,32 @@ def _contains_emoji(text: str) -> bool:
     return False
 
 
+def _is_computer_club_context(text: str) -> bool:
+    """Detect computer club / gaming club context."""
+    value = (text or "").lower()
+    return any(
+        key in value
+        for key in ["комп", "компклуб", "комп клуб", "компьютерн", "игров", "кибер", "гейм", "клуб"]
+    )
+
+
+def _club_certificate_prizes() -> str:
+    """Default simple prizes for computer club giveaways."""
+    return "Сертификаты на 500 ₽, 250 ₽ и 100 ₽ для посещения компьютерного клуба"
+
+
+def _contains_expensive_prize(text: str) -> bool:
+    """Detect obviously expensive/complex prizes to downgrade."""
+    value = (text or "").lower()
+    return any(
+        key in value
+        for key in [
+            "ноутбук", "laptop", "iphone", "айфон", "смартфон", "пк", "компьютер", "ps5",
+            "playstation", "xbox", "nintendo", "монитор", "видеокарт", "rtx", "macbook",
+        ]
+    )
+
+
 def _normalize_title(title: str, brief: str = "", raw_response: str = "") -> str:
     """
     Make title short and catchy: 2-3 words + emoji.
@@ -66,8 +92,8 @@ def _normalize_title(title: str, brief: str = "", raw_response: str = "") -> str
 
     gaming_theme = {
         "keys": ["игр", "гейм", "комп", "клуб", "steam", "кибер", "pc", "пк"],
-        "adjectives": ["Жаркий", "Игровой", "Кибер", "Турбо", "Легендарный"],
-        "nouns": ["розыгрыш", "джекпот", "дроп", "буст", "рейд"],
+        "adjectives": ["Жаркий", "Игровой", "Клубный", "Кибер", "Призовой"],
+        "nouns": ["розыгрыш", "джекпот", "марафон", "удача", "бонус"],
         "emoji": ["🔥", "🎮", "⚡"],
     }
 
@@ -100,12 +126,20 @@ def _normalize_title(title: str, brief: str = "", raw_response: str = "") -> str
     noun = pick(chosen["nouns"], shift=3)
     emoji = pick(chosen["emoji"], shift=5)
 
-    # If model already returned short title, keep its words (max 3 words).
+    allowed_nouns = {
+        "розыгрыш", "лихорадка", "оттепель", "волна", "удача", "перезагрузка", "сказка", "раздача",
+        "джекпот", "подаркопад", "старт", "бонус", "марафон", "охота"
+    }
+
+    # Keep model title only when it is compact and stylistically safe.
     if 2 <= len(words) <= 3 and len(" ".join(words)) <= 36:
         base_words = [w.lower() for w in words]
-        if base_words:
+        keep_model_title = any(noun in base_words for noun in allowed_nouns)
+        if keep_model_title and base_words:
             base_words[0] = base_words[0].capitalize()
-        base = " ".join(base_words)
+            base = " ".join(base_words)
+        else:
+            base = f"{adjective} {noun}"
     else:
         base = f"{adjective} {noun}"
 
@@ -165,18 +199,27 @@ def _extract_single_prize_text(text: str) -> str:
 
 def _normalize_prizes(prizes_value, brief: str = "", raw_response: str = "") -> str:
     """Normalize prizes into one plain readable string."""
+    combined_ctx = f"{brief}\n{raw_response}"
+    is_club = _is_computer_club_context(combined_ctx)
+
     if isinstance(prizes_value, list):
         text = _format_prize_items(prizes_value, single_only=True)
         if text:
+            if is_club and _contains_expensive_prize(text):
+                return _club_certificate_prizes()
             return text
     elif isinstance(prizes_value, dict):
         text = _format_prize_items([prizes_value], single_only=True)
         if text:
+            if is_club and _contains_expensive_prize(text):
+                return _club_certificate_prizes()
             return text
 
     text = str(prizes_value or "").strip()
     if not text:
-        combined = f"{brief}\n{raw_response}".lower()
+        combined = combined_ctx.lower()
+        if is_club:
+            return _club_certificate_prizes()
         if "сертификат" in combined:
             return "Сертификат на 500 ₽ в компьютерный клуб"
         if "сувенир" in combined:
@@ -197,9 +240,18 @@ def _normalize_prizes(prizes_value, brief: str = "", raw_response: str = "") -> 
     if isinstance(parsed, list):
         decoded = _format_prize_items(parsed, single_only=True)
         if decoded:
+            if is_club and _contains_expensive_prize(decoded):
+                return _club_certificate_prizes()
             return decoded
 
-    return _extract_single_prize_text(text)
+    normalized = _extract_single_prize_text(text)
+    if is_club:
+        # In computer-club context prefer simple certificate tiers.
+        if _contains_expensive_prize(normalized):
+            return _club_certificate_prizes()
+        if "сертификат" not in normalized.lower():
+            return _club_certificate_prizes()
+    return normalized
 
 
 def _normalize_description(description: str, prizes: str) -> str:
@@ -212,6 +264,8 @@ def _normalize_description(description: str, prizes: str) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     text = text.replace(" или сувениры", " и сувениры")
     if any(token in text for token in ["[{", "{'", '["', '"]', "}]"]):
+        text = ""
+    if _contains_expensive_prize(text):
         text = ""
 
     if prizes and "разыграем" not in text.lower():
@@ -342,7 +396,9 @@ def _build_heuristic_draft_from_brief(brief: str, raw_response: str = "") -> dic
 
     # Simple prizes detection.
     combined = f"{brief}\n{raw_response}".lower()
-    if "сертификат" in combined:
+    if _is_computer_club_context(combined):
+        prizes = _club_certificate_prizes()
+    elif "сертификат" in combined:
         prizes = "Сертификат на 500 ₽ в компьютерный клуб"
     elif "сувенир" in combined:
         prizes = "Фирменные сувениры клуба"
@@ -579,6 +635,8 @@ class OllamaClient:
             "- description: one concise sentence about the giveaway",
             "- prizes: exactly ONE prize item, plain text string only",
             "- participation_rules: 3 short numbered lines",
+            "Avoid expensive prizes (laptop/phone/console). Prefer simple practical prizes.",
+            "For computer club giveaways, prefer certificate tiers: 500/250/100 ₽.",
             "Do not return arrays/objects in prizes. No [] {} in any field.",
             "Do not include markdown code fences.",
             "Keep the style clear, practical, and human.",
