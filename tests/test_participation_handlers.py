@@ -311,3 +311,34 @@ def test_ollama_normalize_prizes_fixes_mixed_script_word():
         raw_response="",
     )
     assert "компьютерная" in prize.lower()
+
+
+def test_ollama_normalize_prizes_supports_ranked_places_from_text():
+    """Призы по местам должны сохраняться как многострочный список."""
+    from src.ollama_client import _normalize_prizes
+
+    prize = _normalize_prizes(
+        "1 место: компьютерная мышь; 2 место: сертификат на 500 рублей",
+        brief="Компьютерный клуб, геймеры",
+        raw_response="",
+    )
+    assert "1 место" in prize.lower()
+    assert "2 место" in prize.lower()
+    assert "мыш" in prize.lower()
+    assert "сертификат" in prize.lower()
+
+
+def test_ollama_normalize_prizes_supports_ranked_places_from_structured_list():
+    """Structured list с place/position должен превращаться в призы по местам."""
+    from src.ollama_client import _normalize_prizes
+
+    prize = _normalize_prizes(
+        [
+            {"place": 1, "name": "Компьютерная мышь"},
+            {"place": 2, "name": "Сертификат на 500 рублей"},
+        ],
+        brief="Розыгрыш для геймеров",
+        raw_response="",
+    )
+    assert "1 место" in prize.lower()
+    assert "2 место" in prize.lower()

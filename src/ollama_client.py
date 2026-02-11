@@ -94,6 +94,60 @@ def _contains_expensive_prize(text: str) -> bool:
     )
 
 
+def _extract_ranked_prizes_text(text: str) -> str:
+    """Extract ranked prizes like '1 место: ...; 2 место: ...' from free text."""
+    value = _clean_spaces(text)
+    if not value:
+        return ""
+
+    ordinal_map = {
+        "перв": 1,
+        "втор": 2,
+        "трет": 3,
+        "четвер": 4,
+        "пят": 5,
+        "шест": 6,
+        "седьм": 7,
+        "восьм": 8,
+        "девят": 9,
+        "десят": 10,
+    }
+
+    chunks = re.split(r"[;\n]+", value)
+    ranked = []
+    for raw_chunk in chunks:
+        chunk = raw_chunk.strip()
+        if not chunk:
+            continue
+
+        m_num = re.search(r"(\d+)\s*(?:место|места|мест)\s*[:\-–]?\s*(.+)$", chunk, flags=re.IGNORECASE)
+        if m_num:
+            place = int(m_num.group(1))
+            prize = _normalize_mixed_script_text(_clean_spaces(m_num.group(2)))
+            if prize:
+                ranked.append((place, prize))
+            continue
+
+        m_word = re.search(
+            r"\b(перв\w+|втор\w+|трет\w+|четвер\w+|пят\w+|шест\w+|седьм\w+|восьм\w+|девят\w+|десят\w+)\b"
+            r"(?:\s+место)?\s*[:\-–]?\s*(.+)$",
+            chunk,
+            flags=re.IGNORECASE,
+        )
+        if m_word:
+            prefix = m_word.group(1).lower()
+            place = next((num for key, num in ordinal_map.items() if prefix.startswith(key)), None)
+            prize = _normalize_mixed_script_text(_clean_spaces(m_word.group(2)))
+            if place and prize:
+                ranked.append((place, prize))
+
+    if not ranked:
+        return ""
+
+    ranked = sorted(ranked, key=lambda x: x[0])
+    return "\n".join([f"{place} место — {prize}" for place, prize in ranked])
+
+
 def _extract_prize_hint_from_context(text: str) -> str:
     """Try to infer a practical prize from user context/brief."""
     value = _clean_spaces(text).lower()
@@ -260,7 +314,7 @@ def _normalize_title(title: str, brief: str = "", raw_response: str = "") -> str
 def _format_prize_items(items: list[dict], single_only: bool = True) -> str:
     """Convert structured prize list to readable text."""
     parts = []
-    for item in items:
+    for idx, item in enumerate(items):
         if not isinstance(item, dict):
             continue
         prize_type = str(
@@ -270,16 +324,29 @@ def _format_prize_items(items: list[dict], single_only: bool = True) -> str:
             or item.get("title")
             or ""
         ).strip()
+        place = item.get("place") or item.get("position") or item.get("rank")
+        try:
+            place_num = int(place) if place is not None else None
+        except Exception:
+            place_num = None
         qty = item.get("quantity")
         if not prize_type:
             continue
+        prize_type = _normalize_mixed_script_text(prize_type)
         if isinstance(qty, int) and qty > 0:
-            parts.append(f"{prize_type} ({qty} шт.)")
+            prize_text = f"{prize_type} ({qty} шт.)"
         else:
-            parts.append(prize_type)
+            prize_text = prize_type
+        if place_num:
+            parts.append(f"{place_num} место — {prize_text}")
+        elif not single_only and len(items) > 1:
+            parts.append(f"{idx + 1} место — {prize_text}")
+        else:
+            parts.append(prize_text)
         if single_only and parts:
             break
-    return ", ".join(parts).strip()
+    sep = ", " if single_only else "\n"
+    return sep.join(parts).strip()
 
 
 def _extract_single_prize_text(text: str) -> str:
@@ -303,10 +370,11 @@ def _normalize_prizes(prizes_value, brief: str = "", raw_response: str = "") -> 
     """Normalize prizes into one plain readable string."""
     combined_ctx = f"{brief}\n{raw_response}"
     is_club = _is_computer_club_context(combined_ctx)
-    explicit_hint = _extract_prize_hint_from_context(brief)
+    ranked_hint = _extract_ranked_prizes_text(brief)
+    explicit_hint = ranked_hint or _extract_prize_hint_from_context(brief)
 
     if isinstance(prizes_value, list):
-        text = _format_prize_items(prizes_value, single_only=True)
+        text = _format_prize_items(prizes_value, single_only=False)
         if text:
             if is_club and _contains_expensive_prize(text):
                 return _club_certificate_prizes()
@@ -314,7 +382,7 @@ def _normalize_prizes(prizes_value, brief: str = "", raw_response: str = "") -> 
                 return _normalize_mixed_script_text(explicit_hint)
             return _normalize_mixed_script_text(text)
     elif isinstance(prizes_value, dict):
-        text = _format_prize_items([prizes_value], single_only=True)
+        text = _format_prize_items([prizes_value], single_only=False)
         if text:
             if is_club and _contains_expensive_prize(text):
                 return _club_certificate_prizes()
@@ -346,11 +414,15 @@ def _normalize_prizes(prizes_value, brief: str = "", raw_response: str = "") -> 
             except Exception:
                 parsed = None
     if isinstance(parsed, list):
-        decoded = _format_prize_items(parsed, single_only=True)
+        decoded = _format_prize_items(parsed, single_only=False)
         if decoded:
             if is_club and _contains_expensive_prize(decoded):
                 return _club_certificate_prizes()
             return _normalize_mixed_script_text(decoded)
+
+    ranked_from_text = _extract_ranked_prizes_text(text)
+    if ranked_from_text:
+        return _normalize_mixed_script_text(ranked_from_text)
 
     normalized = _extract_single_prize_text(text)
     if is_club:
@@ -382,6 +454,8 @@ def _normalize_description(description: str, prizes: str) -> str:
         # Keep description consistent with normalized prize.
         if ("сертификат" in text.lower()) != ("сертификат" in prizes.lower()):
             text = f"Среди участников разыграем: {prizes}."
+        if "\n" in prizes and "место" not in text.lower():
+            text = "Разыгрываем призы по местам:\n" + prizes
     return text
 
 
@@ -745,7 +819,9 @@ class OllamaClient:
             "Use the same structure as manual mode fields:",
             "- title: short catchy name",
             "- description: one concise sentence about the giveaway",
-            "- prizes: exactly ONE prize item, plain text string only",
+            "- prizes: plain text; can be one prize OR multiple prizes by places",
+            "- if multiple prizes: format like '1 место — ...', '2 место — ...', '3 место — ...'",
+            "- prize value should decrease by place: 1st > 2nd > 3rd",
             "- participation_rules: 3 short numbered lines",
             "Avoid expensive prizes (laptop/phone/console). Prefer simple practical prizes.",
             "If user explicitly names a prize, keep that prize type (do not replace with generic certificates).",
