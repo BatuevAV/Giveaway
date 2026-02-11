@@ -342,3 +342,15 @@ def test_ollama_normalize_prizes_supports_ranked_places_from_structured_list():
     )
     assert "1 место" in prize.lower()
     assert "2 место" in prize.lower()
+
+
+def test_ollama_normalize_prizes_formats_single_line_ranked_without_double_dash():
+    """Одна строка с несколькими местами должна разбиваться на строки без двойных тире."""
+    from src.ollama_client import _normalize_prizes
+
+    raw = "1 место — — компьютерная мышь 2 место — сертификат на 500 рублей"
+    prize = _normalize_prizes(raw, brief="компьютерный клуб", raw_response="")
+    assert "— —" not in prize
+    assert "\n" in prize
+    assert "🥇 1 место" in prize
+    assert "🥈 2 место" in prize

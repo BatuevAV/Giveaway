@@ -96,7 +96,7 @@ def _contains_expensive_prize(text: str) -> bool:
 
 def _extract_ranked_prizes_text(text: str) -> str:
     """Extract ranked prizes like '1 место: ...; 2 место: ...' from free text."""
-    value = _clean_spaces(text)
+    value = _normalize_mixed_script_text(_clean_spaces(text))
     if not value:
         return ""
 
@@ -113,39 +113,54 @@ def _extract_ranked_prizes_text(text: str) -> str:
         "десят": 10,
     }
 
-    chunks = re.split(r"[;\n]+", value)
+    place_pattern = re.compile(
+        r"(?:(\d+)\s*(?:место|места|мест)\b|"
+        r"(перв\w+|втор\w+|трет\w+|четвер\w+|пят\w+|шест\w+|седьм\w+|восьм\w+|девят\w+|десят\w+)"
+        r"(?:\s+место)?)\s*[:\-–—]?\s*",
+        flags=re.IGNORECASE,
+    )
+    markers = list(place_pattern.finditer(value))
+    if not markers:
+        return ""
+
+    def clean_prize_fragment(fragment: str) -> str:
+        cleaned = _clean_spaces(fragment)
+        cleaned = re.sub(r"^[\-–—:;,.\s]+", "", cleaned)
+        cleaned = re.sub(r"[\s,;]+$", "", cleaned)
+        return cleaned
+
+    def place_emoji(place: int) -> str:
+        return {1: "🥇", 2: "🥈", 3: "🥉"}.get(place, "🎖")
+
     ranked = []
-    for raw_chunk in chunks:
-        chunk = raw_chunk.strip()
-        if not chunk:
+    for idx, marker in enumerate(markers):
+        place_num = None
+        if marker.group(1):
+            place_num = int(marker.group(1))
+        elif marker.group(2):
+            prefix = marker.group(2).lower()
+            place_num = next((num for key, num in ordinal_map.items() if prefix.startswith(key)), None)
+
+        if not place_num:
             continue
 
-        m_num = re.search(r"(\d+)\s*(?:место|места|мест)\s*[:\-–]?\s*(.+)$", chunk, flags=re.IGNORECASE)
-        if m_num:
-            place = int(m_num.group(1))
-            prize = _normalize_mixed_script_text(_clean_spaces(m_num.group(2)))
-            if prize:
-                ranked.append((place, prize))
-            continue
-
-        m_word = re.search(
-            r"\b(перв\w+|втор\w+|трет\w+|четвер\w+|пят\w+|шест\w+|седьм\w+|восьм\w+|девят\w+|десят\w+)\b"
-            r"(?:\s+место)?\s*[:\-–]?\s*(.+)$",
-            chunk,
-            flags=re.IGNORECASE,
-        )
-        if m_word:
-            prefix = m_word.group(1).lower()
-            place = next((num for key, num in ordinal_map.items() if prefix.startswith(key)), None)
-            prize = _normalize_mixed_script_text(_clean_spaces(m_word.group(2)))
-            if place and prize:
-                ranked.append((place, prize))
+        start = marker.end()
+        end = markers[idx + 1].start() if idx + 1 < len(markers) else len(value)
+        prize = clean_prize_fragment(value[start:end])
+        if prize:
+            ranked.append((place_num, prize))
 
     if not ranked:
         return ""
 
-    ranked = sorted(ranked, key=lambda x: x[0])
-    return "\n".join([f"{place} место — {prize}" for place, prize in ranked])
+    # Keep first occurrence per place, ordered by place.
+    dedup = {}
+    for place, prize in ranked:
+        if place not in dedup:
+            dedup[place] = prize
+
+    ordered = sorted(dedup.items(), key=lambda x: x[0])
+    return "\n".join([f"{place_emoji(place)} {place} место — {prize}" for place, prize in ordered])
 
 
 def _extract_prize_hint_from_context(text: str) -> str:
