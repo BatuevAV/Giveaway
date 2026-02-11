@@ -39,6 +39,7 @@ async def main():
     try:
         await application.initialize()
         await application.start()
+        await bot.setup_bot_commands()
         await application.updater.start_polling()
         scheduler.start()
         

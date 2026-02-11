@@ -1,7 +1,7 @@
 """Основной модуль бота для розыгрышей."""
 
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 from config import settings
@@ -255,6 +255,20 @@ class GiveawayBot:
         # Обработчики участия в розыгрышах
         for handler in get_participation_handlers():
             self.application.add_handler(handler)
+
+    async def setup_bot_commands(self) -> None:
+        """Регистрирует команды в меню Telegram рядом с полем ввода."""
+        if not self.application:
+            return
+
+        commands = [
+            BotCommand("start", "Главное меню"),
+            BotCommand("help", "Помощь"),
+            BotCommand("create_giveaway", "Создать розыгрыш"),
+            BotCommand("list_giveaways", "Список розыгрышей"),
+        ]
+        await self.application.bot.set_my_commands(commands)
+        logger.info("Telegram bot commands menu configured")
     
     def build(self) -> Application:
         """
