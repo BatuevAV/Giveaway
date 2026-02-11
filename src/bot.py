@@ -46,6 +46,7 @@ class GiveawayBot:
         help_text += "👤 Для всех:\n"
         help_text += "/start - Начать работу с ботом\n"
         help_text += "/help - Показать это сообщение\n"
+        help_text += "/my_participation - Проверить участие в активном розыгрыше\n"
 
         if is_user_admin:
             help_text += "\n👨‍💼 Для администраторов:\n"
@@ -265,6 +266,7 @@ class GiveawayBot:
         commands = [
             BotCommand("start", "Главное меню"),
             BotCommand("help", "Помощь"),
+            BotCommand("my_participation", "Проверить мое участие"),
             BotCommand("create_giveaway", "Создать розыгрыш"),
             BotCommand("list_giveaways", "Список розыгрышей"),
         ]

@@ -3,12 +3,130 @@
 import logging
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, CallbackQueryHandler
+from telegram.ext import ContextTypes, CallbackQueryHandler, CommandHandler
 
 from src.database import Database
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _is_current_active_giveaway(giveaway) -> bool:
+    """Проверка, что розыгрыш сейчас активен по флагу и времени."""
+    if not giveaway or not giveaway.is_active:
+        return False
+
+    now = datetime.utcnow()
+    if giveaway.starts_at and giveaway.starts_at > now:
+        return False
+    if giveaway.ends_at and giveaway.ends_at <= now:
+        return False
+    return True
+
+
+def _build_participation_status_text(giveaway, is_participating: bool, participation) -> str:
+    """Формирует текст статуса участия пользователя в розыгрыше."""
+    if is_participating:
+        participated_at = participation.participated_at.strftime("%d.%m.%Y %H:%M") if participation else "неизвестно"
+        winner_mark = "🏆 Да" if participation and participation.is_winner else "❌ Нет"
+        return (
+            f"🎉 <b>{giveaway.title}</b>\n\n"
+            f"✅ Статус участия: <b>Участвуете</b>\n"
+            f"🕐 Дата регистрации: {participated_at}\n"
+            f"🏅 Победитель: {winner_mark}\n"
+            f"⏰ Окончание: {giveaway.ends_at.strftime('%d.%m.%Y %H:%M') if giveaway.ends_at else 'не указано'}"
+        )
+    return (
+        f"🎉 <b>{giveaway.title}</b>\n\n"
+        f"❌ Статус участия: <b>Не участвуете</b>\n"
+        f"ℹ️ Чтобы участвовать, нажмите кнопку участия под анонсом розыгрыша."
+    )
+
+
+async def _send_active_giveaways_choice(update: Update, context: ContextTypes.DEFAULT_TYPE, message_target) -> None:
+    """Показывает список текущих активных розыгрышей для выбора."""
+    db = Database(settings.DATABASE_URL)
+    try:
+        giveaways = await db.get_active_giveaways()
+        current_giveaways = [g for g in giveaways if _is_current_active_giveaway(g)]
+    finally:
+        await db.close()
+
+    if not current_giveaways:
+        text = "ℹ️ Сейчас нет активных розыгрышей для проверки."
+        if hasattr(message_target, "reply_text"):
+            await message_target.reply_text(text)
+        else:
+            await message_target.edit_message_text(text)
+        return
+
+    if len(current_giveaways) == 1:
+        giveaway = current_giveaways[0]
+        await _send_participation_result(update, context, giveaway.id, message_target)
+        return
+
+    keyboard = [
+        [InlineKeyboardButton(f"🎉 {g.title[:45]}", callback_data=f"check_participation_{g.id}")]
+        for g in current_giveaways[:20]
+    ]
+    text = "📋 Выберите розыгрыш, в котором хотите проверить своё участие:"
+    if hasattr(message_target, "reply_text"):
+        await message_target.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        await message_target.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def _send_participation_result(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    giveaway_id: int,
+    message_target,
+) -> None:
+    """Отправляет результат проверки участия пользователя в выбранном розыгрыше."""
+    user_tg_id = update.effective_user.id
+    db = Database(settings.DATABASE_URL)
+    try:
+        giveaway = await db.get_giveaway_by_id(giveaway_id)
+        if not giveaway or not _is_current_active_giveaway(giveaway):
+            text = "❌ Этот розыгрыш неактивен или уже завершён."
+            if hasattr(message_target, "reply_text"):
+                await message_target.reply_text(text)
+            else:
+                await message_target.edit_message_text(text)
+            return
+
+        user = await db.get_user_by_telegram_id(user_tg_id)
+        participation = await db.get_participation(user.id, giveaway_id) if user else None
+        is_participating = participation is not None
+        text = _build_participation_status_text(giveaway, is_participating, participation)
+
+        keyboard = [[InlineKeyboardButton("⬅️ К списку розыгрышей", callback_data="check_participation_list")]]
+        if hasattr(message_target, "reply_text"):
+            await message_target.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await message_target.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    finally:
+        await db.close()
+
+
+async def check_my_participation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Команда: проверить участие пользователя в текущих активных розыгрышах."""
+    await _send_active_giveaways_choice(update, context, update.message)
+
+
+async def check_my_participation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Callback выбора розыгрыша для проверки участия."""
+    query = update.callback_query
+    await query.answer()
+    giveaway_id = int(query.data.split("_")[-1])
+    await _send_participation_result(update, context, giveaway_id, query)
+
+
+async def check_my_participation_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Callback возврата к списку активных розыгрышей для проверки участия."""
+    query = update.callback_query
+    await query.answer()
+    await _send_active_giveaways_choice(update, context, query)
 
 
 async def join_giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -183,6 +301,9 @@ async def cancel_join(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 def get_participation_handlers():
     """Возвращает обработчики для участия в розыгрышах."""
     return [
+        CommandHandler("my_participation", check_my_participation),
+        CallbackQueryHandler(check_my_participation_callback, pattern=r"^check_participation_\d+$"),
+        CallbackQueryHandler(check_my_participation_back, pattern=r"^check_participation_list$"),
         CallbackQueryHandler(join_giveaway, pattern="^join_"),
         CallbackQueryHandler(close_message, pattern="^close_message$"),
         CallbackQueryHandler(cancel_join, pattern="^cancel_join$")
