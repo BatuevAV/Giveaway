@@ -49,6 +49,28 @@ def _contains_expensive_prize(text: str) -> bool:
     )
 
 
+def _extract_prize_hint_from_context(text: str) -> str:
+    """Try to infer a practical prize from user context/brief."""
+    value = (text or "").lower()
+
+    hints = [
+        ("мыш", "Игровая компьютерная мышь"),
+        ("клавиат", "Игровая клавиатура"),
+        ("гарнитур", "Игровая гарнитура"),
+        ("наушник", "Игровые наушники"),
+        ("коврик", "Игровой коврик для мыши"),
+        ("геймпад", "Геймпад"),
+        ("джойстик", "Игровой джойстик"),
+        ("мерч", "Фирменный мерч клуба"),
+        ("сувенир", "Фирменные сувениры клуба"),
+        ("сертификат", "Сертификаты на 500 ₽, 250 ₽ и 100 ₽ для посещения компьютерного клуба"),
+    ]
+    for key, prize in hints:
+        if key in value:
+            return prize
+    return ""
+
+
 def _normalize_title(title: str, brief: str = "", raw_response: str = "") -> str:
     """
     Make title short and catchy: 2-3 words + emoji.
@@ -219,7 +241,8 @@ def _normalize_prizes(prizes_value, brief: str = "", raw_response: str = "") -> 
     if not text:
         combined = combined_ctx.lower()
         if is_club:
-            return _club_certificate_prizes()
+            hint = _extract_prize_hint_from_context(combined_ctx)
+            return hint or _club_certificate_prizes()
         if "сертификат" in combined:
             return "Сертификат на 500 ₽ в компьютерный клуб"
         if "сувенир" in combined:
@@ -246,10 +269,8 @@ def _normalize_prizes(prizes_value, brief: str = "", raw_response: str = "") -> 
 
     normalized = _extract_single_prize_text(text)
     if is_club:
-        # In computer-club context prefer simple certificate tiers.
+        # In computer-club context downgrade only obviously expensive prizes.
         if _contains_expensive_prize(normalized):
-            return _club_certificate_prizes()
-        if "сертификат" not in normalized.lower():
             return _club_certificate_prizes()
     return normalized
 
@@ -397,7 +418,7 @@ def _build_heuristic_draft_from_brief(brief: str, raw_response: str = "") -> dic
     # Simple prizes detection.
     combined = f"{brief}\n{raw_response}".lower()
     if _is_computer_club_context(combined):
-        prizes = _club_certificate_prizes()
+        prizes = _extract_prize_hint_from_context(combined) or _club_certificate_prizes()
     elif "сертификат" in combined:
         prizes = "Сертификат на 500 ₽ в компьютерный клуб"
     elif "сувенир" in combined:

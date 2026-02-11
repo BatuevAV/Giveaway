@@ -244,3 +244,27 @@ async def test_join_to_max_then_admin_announce_end_to_end(monkeypatch):
     ]
     assert len(broadcast_calls) == 2
     announce_update.callback_query.edit_message_text.assert_awaited_once()
+
+
+def test_ollama_normalize_prizes_keeps_explicit_simple_club_prize():
+    """Для комп-клуба явный простой приз (мышка) не должен перетираться в сертификаты."""
+    from src.ollama_client import _normalize_prizes
+
+    prize = _normalize_prizes(
+        "Игровая мышка",
+        brief="Для компьютерного клуба, разыгрываем мышку",
+        raw_response="",
+    )
+    assert "мыш" in prize.lower()
+
+
+def test_ollama_normalize_prizes_downgrades_expensive_club_prize():
+    """Для комп-клуба дорогие призы по-прежнему заменяются на сертификаты."""
+    from src.ollama_client import _normalize_prizes
+
+    prize = _normalize_prizes(
+        "Ноутбук ASUS TUF Gaming",
+        brief="Для компьютерного клуба",
+        raw_response="",
+    )
+    assert "сертификат" in prize.lower()
