@@ -39,8 +39,8 @@ class GiveawayBot:
         """Формирует help-текст с учетом роли пользователя."""
         from src.permissions import is_admin, is_owner
 
-        is_user_admin = await is_admin(user_id)
         is_user_owner = await is_owner(user_id)
+        is_user_admin = await is_admin(user_id) or is_user_owner
 
         help_text = "📋 Доступные команды:\n\n"
         help_text += "👤 Для всех:\n"
@@ -54,6 +54,7 @@ class GiveawayBot:
             help_text += "/view_giveaway <id> - Подробная информация о розыгрыше\n"
             help_text += "/draw_winners <id> - Провести розыгрыш и выбрать победителей\n"
             help_text += "/force_draw <id> - Принудительный розыгрыш (если участников мало)\n"
+            help_text += "/force_draw_<id> - Старый формат принудительного розыгрыша (совместимость)\n"
             help_text += "/redraw_winners <id> - Провести повторный розыгрыш\n"
             help_text += "/edit_giveaway <id> - Изменить параметры розыгрыша\n"
             help_text += "/delete_giveaway <id> - Удалить розыгрыш\n"
