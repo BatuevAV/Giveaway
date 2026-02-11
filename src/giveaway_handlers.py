@@ -1308,8 +1308,25 @@ async def navigation_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     # Далее к условиям
     elif action == "next_to_rules":
+        # Если администратор нажал "Далее", применяем стандартные условия
+        # и сразу переводим на следующий шаг, чтобы не зависать на вводе текста.
+        giveaway['participation_rules'] = (
+            "1) Подписаться на канал.\n"
+            "2) Нажать кнопку участия под постом розыгрыша.\n"
+            "3) Дождаться публикации результатов."
+        )
+        keyboard = [
+            [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_rules")],
+            [InlineKeyboardButton("➕ Добавить обязательные каналы", callback_data="add_required_channels")],
+            [InlineKeyboardButton("⏭ Пропустить", callback_data="skip_required_channels")]
+        ]
+        reply_markup = _with_cancel_button(keyboard)
         await query.edit_message_text(
-            "Шаг 8/11: Введите условия участия (например: 'Подписаться на канал @channel'):"
+            "✅ Условия участия сохранены (стандартные)\n\n"
+            "Хотите добавить обязательные каналы для подписки?\n\n"
+            "Если выберете 'Добавить', отправьте chat_id каналов через запятую.\n"
+            "Например: -1001234567890, -1009876543210",
+            reply_markup=reply_markup
         )
         return RULES
     
