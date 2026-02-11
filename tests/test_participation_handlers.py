@@ -280,3 +280,22 @@ def test_ollama_normalize_prizes_prefers_explicit_hint_over_generic_certificates
         raw_response="",
     )
     assert "мыш" in prize.lower()
+
+
+def test_ollama_normalize_title_avoids_bad_agreement():
+    """Название с плохим согласованием должно заменяться на корректный вариант."""
+    from src.ollama_client import _normalize_title
+
+    title = _normalize_title("Жаркий удача 🎮", brief="для игрового клуба")
+    assert "жаркий удача" not in title.lower()
+
+
+def test_ollama_normalize_description_syncs_with_prize():
+    """Если описание осталось со старым типом приза, оно синхронизируется с нормализованным призом."""
+    from src.ollama_client import _normalize_description
+
+    desc = _normalize_description(
+        "Среди участников разыграем: Сертификаты на 500 ₽, 250 ₽ и 100 ₽.",
+        "Игровая компьютерная мышь",
+    )
+    assert "мыш" in desc.lower()

@@ -13,6 +13,10 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+def _clean_spaces(value: str) -> str:
+    return re.sub(r"\s+", " ", (value or "")).strip()
+
+
 def _contains_emoji(text: str) -> bool:
     """Basic emoji presence check."""
     if not text:
@@ -51,7 +55,23 @@ def _contains_expensive_prize(text: str) -> bool:
 
 def _extract_prize_hint_from_context(text: str) -> str:
     """Try to infer a practical prize from user context/brief."""
-    value = (text or "").lower()
+    value = _clean_spaces(text).lower()
+
+    patterns = [
+        r"(?:разыгрываем|разыграем|приз|призы)\s*[:\-]?\s*([^.!\n]{3,120})",
+        r"(?:что\s+разыгрываем|что\s+дарим)\s*[:\-]?\s*([^.!\n]{3,120})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, value, flags=re.IGNORECASE)
+        if not match:
+            continue
+        candidate = _clean_spaces(match.group(1))
+        for sep in [" для ", " аудитори", " стиль ", " тон ", " геймер", " подписчик"]:
+            idx = candidate.find(sep)
+            if idx > 0:
+                candidate = candidate[:idx].strip()
+        if len(candidate) >= 3:
+            return candidate.capitalize()
 
     hints = [
         ("мыш", "Игровая компьютерная мышь"),
@@ -69,6 +89,24 @@ def _extract_prize_hint_from_context(text: str) -> str:
         if key in value:
             return prize
     return ""
+
+
+def _title_has_bad_agreement(text: str) -> bool:
+    """Heuristic for common grammar mistakes in short title pairs."""
+    words = _clean_spaces(text).lower().split()
+    if len(words) < 2:
+        return False
+    first, second = words[0], words[1]
+
+    fem_nouns = {"удача", "лихорадка", "оттепель", "волна", "раздача", "охота", "сказка"}
+    masc_adj_endings = ("ый", "ий", "ой")
+    fem_adj_endings = ("ая", "яя")
+
+    if second in fem_nouns and first.endswith(masc_adj_endings):
+        return True
+    if second in {"розыгрыш", "бонус", "джекпот", "марафон", "старт"} and first.endswith(fem_adj_endings):
+        return True
+    return False
 
 
 def _normalize_title(title: str, brief: str = "", raw_response: str = "") -> str:
@@ -157,7 +195,8 @@ def _normalize_title(title: str, brief: str = "", raw_response: str = "") -> str
     if 2 <= len(words) <= 3 and len(" ".join(words)) <= 36:
         base_words = [w.lower() for w in words]
         keep_model_title = any(noun in base_words for noun in allowed_nouns)
-        if keep_model_title and base_words:
+        candidate = " ".join(base_words)
+        if keep_model_title and base_words and not _title_has_bad_agreement(candidate):
             base_words[0] = base_words[0].capitalize()
             base = " ".join(base_words)
         else:
@@ -298,6 +337,10 @@ def _normalize_description(description: str, prizes: str) -> str:
 
     if prizes and "разыграем" not in text.lower():
         text = f"Среди участников разыграем: {prizes}."
+    elif prizes:
+        # Keep description consistent with normalized prize.
+        if ("сертификат" in text.lower()) != ("сертификат" in prizes.lower()):
+            text = f"Среди участников разыграем: {prizes}."
     return text
 
 
