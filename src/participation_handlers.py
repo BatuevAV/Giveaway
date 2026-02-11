@@ -130,6 +130,130 @@ async def check_my_participation_back(update: Update, context: ContextTypes.DEFA
     await _send_active_giveaways_choice(update, context, query)
 
 
+async def _notify_admins_max_participants(
+    giveaway,
+    participants_count: int,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Отправляет уведомление админам/владельцу о достижении лимита участников."""
+    db = Database(settings.DATABASE_URL)
+    try:
+        admins = await db.get_all_admins()
+    finally:
+        await db.close()
+
+    if not admins:
+        return
+
+    text = (
+        "⚠️ <b>Достигнут максимум участников</b>\n\n"
+        f"🎉 <b>{giveaway.title}</b>\n"
+        f"🆔 Розыгрыш: <b>#{giveaway.id}</b>\n"
+        f"👥 Участников: <b>{participants_count}/{giveaway.max_participants}</b>\n\n"
+        "Выберите действие:"
+    )
+    keyboard = [
+        [
+            InlineKeyboardButton("📣 Анонсировать", callback_data=f"max_participants_announce_{giveaway.id}"),
+            InlineKeyboardButton("⏭ Пропустить", callback_data=f"max_participants_skip_{giveaway.id}"),
+        ]
+    ]
+
+    for admin in admins:
+        try:
+            await context.bot.send_message(
+                chat_id=admin.telegram_id,
+                text=text,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to notify admin %s about max participants in giveaway %s: %s",
+                admin.telegram_id,
+                giveaway.id,
+                exc,
+            )
+
+
+async def _broadcast_max_participants_to_target_chats(
+    giveaway,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> tuple[int, int]:
+    """Отправляет в целевые чаты сообщение о достижении лимита участников."""
+    if not giveaway.target_chats:
+        return 0, 0
+
+    text = (
+        "⚠️ <b>Набор участников завершён</b>\n\n"
+        f"🎉 <b>{giveaway.title}</b>\n"
+        f"👥 Достигнут максимум участников: <b>{giveaway.max_participants}</b>\n"
+        "Спасибо всем за участие! Ожидайте результаты розыгрыша."
+    )
+
+    success = 0
+    failed = 0
+    for chat_id in giveaway.target_chats:
+        try:
+            await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+            success += 1
+        except Exception as exc:
+            failed += 1
+            logger.error(
+                "Failed to broadcast max-participants message for giveaway %s to chat %s: %s",
+                giveaway.id,
+                chat_id,
+                exc,
+            )
+    return success, failed
+
+
+async def announce_max_participants(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Кнопка админа: отправить в целевые чаты анонс о достижении лимита участников."""
+    query = update.callback_query
+    await query.answer()
+
+    user_id = update.effective_user.id
+    if not await is_admin(user_id):
+        await query.answer("⛔️ Только администратор может выполнить это действие.", show_alert=True)
+        return
+
+    giveaway_id = int(query.data.split("_")[-1])
+    db = Database(settings.DATABASE_URL)
+    try:
+        giveaway = await db.get_giveaway_by_id(giveaway_id)
+    finally:
+        await db.close()
+
+    if not giveaway:
+        await query.edit_message_text("❌ Розыгрыш не найден.")
+        return
+
+    success, failed = await _broadcast_max_participants_to_target_chats(giveaway, context)
+    await query.edit_message_text(
+        "✅ Анонс о достижении лимита отправлен.\n\n"
+        f"🎉 {giveaway.title}\n"
+        f"📢 Успешно отправлено: {success}\n"
+        f"❌ Ошибок отправки: {failed}"
+    )
+
+
+async def skip_max_participants_announce(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Кнопка админа: пропустить анонс о достижении лимита участников."""
+    query = update.callback_query
+    await query.answer()
+
+    user_id = update.effective_user.id
+    if not await is_admin(user_id):
+        await query.answer("⛔️ Только администратор может выполнить это действие.", show_alert=True)
+        return
+
+    giveaway_id = int(query.data.split("_")[-1])
+    await query.edit_message_text(
+        f"⏭ Анонс о достижении лимита для розыгрыша #{giveaway_id} пропущен."
+    )
+
+
 async def join_giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Участие в розыгрыше."""
     query = update.callback_query
@@ -254,6 +378,8 @@ async def join_giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         
         # Получаем обновлённое количество участников
         participants_count = await db.get_participants_count(giveaway_id)
+        if giveaway.max_participants and participants_count == giveaway.max_participants:
+            await _notify_admins_max_participants(giveaway, participants_count, context)
         
         max_text = f"/{giveaway.max_participants}" if giveaway.max_participants else ""
         
@@ -313,6 +439,8 @@ def get_participation_handlers():
         CommandHandler("my_participation", check_my_participation),
         CallbackQueryHandler(check_my_participation_callback, pattern=r"^check_participation_\d+$"),
         CallbackQueryHandler(check_my_participation_back, pattern=r"^check_participation_list$"),
+        CallbackQueryHandler(announce_max_participants, pattern=r"^max_participants_announce_\d+$"),
+        CallbackQueryHandler(skip_max_participants_announce, pattern=r"^max_participants_skip_\d+$"),
         CallbackQueryHandler(join_giveaway, pattern="^join_"),
         CallbackQueryHandler(close_message, pattern="^close_message$"),
         CallbackQueryHandler(cancel_join, pattern="^cancel_join$")
