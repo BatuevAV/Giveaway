@@ -160,3 +160,87 @@ async def test_announce_max_participants_broadcasts_to_target_chats(monkeypatch)
     assert send_message.await_count == 2
     query.edit_message_text.assert_awaited_once()
 
+
+@pytest.mark.asyncio
+async def test_join_to_max_then_admin_announce_end_to_end(monkeypatch):
+    """Интеграционный сценарий: join достигает лимита, админ нажимает 'Анонсировать', идет рассылка в target_chats."""
+    monkeypatch.setattr(ph, "is_admin", AsyncMock(side_effect=lambda uid: uid == 9001))
+    monkeypatch.setattr(ph, "is_owner", AsyncMock(return_value=False))
+
+    giveaway = SimpleNamespace(
+        id=21,
+        title="Розыгрыш 21",
+        is_active=True,
+        starts_at=None,
+        ends_at=None,
+        required_channels=None,
+        max_participants=2,
+        winners_count=1,
+        target_chats=[-2001, -2002],
+    )
+    participant_user = SimpleNamespace(id=501)
+    admins = [SimpleNamespace(telegram_id=9001)]
+
+    class FakeDb:
+        participants_calls = 0
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def get_giveaway_by_id(self, _gid):
+            return giveaway
+
+        async def get_participants_count(self, _gid):
+            FakeDb.participants_calls += 1
+            # До add_participant -> 1, после -> 2 (достигли лимита)
+            return 1 if FakeDb.participants_calls == 1 else 2
+
+        async def get_participation(self, *_args, **_kwargs):
+            return None
+
+        async def get_user_by_telegram_id(self, _tgid):
+            return participant_user
+
+        async def add_participant(self, *_args, **_kwargs):
+            return None
+
+        async def get_all_admins(self):
+            return admins
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(ph, "Database", FakeDb)
+
+    send_message = AsyncMock()
+    context = SimpleNamespace(bot=SimpleNamespace(send_message=send_message))
+
+    # 1) Пользователь присоединяется и достигает max_participants.
+    join_update = SimpleNamespace(
+        callback_query=_DummyQuery("join_21"),
+        effective_user=SimpleNamespace(id=7001, username="u", first_name="F", last_name="L"),
+    )
+    await ph.join_giveaway(join_update, context)
+
+    # Ищем админское уведомление с кнопкой "Анонсировать".
+    admin_notify_calls = [
+        c for c in send_message.await_args_list
+        if c.kwargs.get("chat_id") == 9001 and "reply_markup" in c.kwargs
+    ]
+    assert admin_notify_calls, "Не найдено уведомление админу о достижении лимита"
+    callback_data = admin_notify_calls[0].kwargs["reply_markup"].inline_keyboard[0][0].callback_data
+    assert callback_data == "max_participants_announce_21"
+
+    # 2) Админ нажимает "Анонсировать", сообщение уходит в target_chats.
+    announce_update = SimpleNamespace(
+        callback_query=_DummyQuery(callback_data),
+        effective_user=SimpleNamespace(id=9001),
+    )
+    await ph.announce_max_participants(announce_update, context)
+
+    broadcast_calls = [
+        c for c in send_message.await_args_list
+        if c.kwargs.get("chat_id") in (-2001, -2002)
+    ]
+    assert len(broadcast_calls) == 2
+    announce_update.callback_query.edit_message_text.assert_awaited_once()
