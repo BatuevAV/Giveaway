@@ -268,3 +268,15 @@ def test_ollama_normalize_prizes_downgrades_expensive_club_prize():
         raw_response="",
     )
     assert "сертификат" in prize.lower()
+
+
+def test_ollama_normalize_prizes_prefers_explicit_hint_over_generic_certificates():
+    """Если пользователь явно указал приз в brief, сертификаты от модели не должны перетирать этот выбор."""
+    from src.ollama_client import _normalize_prizes
+
+    prize = _normalize_prizes(
+        "Сертификаты на 500 ₽, 250 ₽ и 100 ₽ для посещения компьютерного клуба",
+        brief="Для компьютерного клуба, разыгрываем компьютерную мышку",
+        raw_response="",
+    )
+    assert "мыш" in prize.lower()

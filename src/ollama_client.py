@@ -223,25 +223,30 @@ def _normalize_prizes(prizes_value, brief: str = "", raw_response: str = "") -> 
     """Normalize prizes into one plain readable string."""
     combined_ctx = f"{brief}\n{raw_response}"
     is_club = _is_computer_club_context(combined_ctx)
+    explicit_hint = _extract_prize_hint_from_context(brief)
 
     if isinstance(prizes_value, list):
         text = _format_prize_items(prizes_value, single_only=True)
         if text:
             if is_club and _contains_expensive_prize(text):
                 return _club_certificate_prizes()
+            if explicit_hint and "сертификат" in text.lower() and "сертификат" not in explicit_hint.lower():
+                return explicit_hint
             return text
     elif isinstance(prizes_value, dict):
         text = _format_prize_items([prizes_value], single_only=True)
         if text:
             if is_club and _contains_expensive_prize(text):
                 return _club_certificate_prizes()
+            if explicit_hint and "сертификат" in text.lower() and "сертификат" not in explicit_hint.lower():
+                return explicit_hint
             return text
 
     text = str(prizes_value or "").strip()
     if not text:
         combined = combined_ctx.lower()
         if is_club:
-            hint = _extract_prize_hint_from_context(combined_ctx)
+            hint = explicit_hint or _extract_prize_hint_from_context(combined_ctx)
             return hint or _club_certificate_prizes()
         if "сертификат" in combined:
             return "Сертификат на 500 ₽ в компьютерный клуб"
@@ -272,6 +277,8 @@ def _normalize_prizes(prizes_value, brief: str = "", raw_response: str = "") -> 
         # In computer-club context downgrade only obviously expensive prizes.
         if _contains_expensive_prize(normalized):
             return _club_certificate_prizes()
+        if explicit_hint and "сертификат" in normalized.lower() and "сертификат" not in explicit_hint.lower():
+            return explicit_hint
     return normalized
 
 
@@ -657,7 +664,7 @@ class OllamaClient:
             "- prizes: exactly ONE prize item, plain text string only",
             "- participation_rules: 3 short numbered lines",
             "Avoid expensive prizes (laptop/phone/console). Prefer simple practical prizes.",
-            "For computer club giveaways, prefer certificate tiers: 500/250/100 ₽.",
+            "If user explicitly names a prize, keep that prize type (do not replace with generic certificates).",
             "Do not return arrays/objects in prizes. No [] {} in any field.",
             "Do not include markdown code fences.",
             "Keep the style clear, practical, and human.",
