@@ -6,6 +6,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CallbackQueryHandler, CommandHandler
 
 from src.database import Database
+from src.permissions import is_admin
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -136,6 +137,14 @@ async def join_giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Получаем ID розыгрыша из callback_data
     giveaway_id = int(query.data.split('_')[1])
     user_id = update.effective_user.id
+
+    # Администраторы и владелец не участвуют в розыгрышах
+    if await is_admin(user_id):
+        await query.answer(
+            "⛔️ Администраторы и владелец не могут участвовать в розыгрышах.",
+            show_alert=True
+        )
+        return
     
     db = Database(settings.DATABASE_URL)
     
